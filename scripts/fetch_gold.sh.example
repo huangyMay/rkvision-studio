@@ -1,0 +1,40 @@
+#!/bin/bash
+# 【用法模板】从"金标准资产区"拷贝板上金标准 fixtures 到 assets/gold/（业务资产不入库，git 已 ignore assets/）
+#
+# 金标准 = 模型板上推理的输入张量 + 输出张量 + 框基线日志，用于引擎逐位回归。
+# 每个项目的金标准目录结构自定；本模板对应 helmet_gold 工程的布局：
+#   $GOLD/
+#     npu_outputs/helmet_test.test.jpg.out{0,1,2}.bin   # 三尺度输出张量
+#     npu_outputs/helmet_test.test.jpg.input.rgb        # 输入张量（letterbox 后 NHWC RGB）
+#     测试结果/官方模型_对照日志.txt                      # 框基线（格式: helmet @ (x0 y0 x1 y1) conf）
+#     helmet_detect_my.rknn                             # 金标准模型
+#
+# 用前先指定资产目录：
+#   export GOLD_SRC=/path/to/你的金标准目录
+#   bash scripts/fetch_gold.sh.example
+set -e
+: "${GOLD_SRC:?请先 export GOLD_SRC=金标准资产目录}"
+ROOT=$(cd "$(dirname "$0")/.."; pwd)
+SRC_TENSOR="$GOLD_SRC/npu_outputs"
+SRC_LOG="$GOLD_SRC/测试结果/官方模型_对照日志.txt"
+SRC_MODEL="$GOLD_SRC/helmet_detect_my.rknn"
+
+mkdir -p "$ROOT/assets/gold" "$ROOT/assets/models" "$ROOT/projects/helmet_gold/assets/test_images"
+cp "$SRC_TENSOR/helmet_test.test.jpg.out0.bin" "$ROOT/assets/gold/out0.bin"
+cp "$SRC_TENSOR/helmet_test.test.jpg.out1.bin" "$ROOT/assets/gold/out1.bin"
+cp "$SRC_TENSOR/helmet_test.test.jpg.out2.bin" "$ROOT/assets/gold/out2.bin"
+cp "$SRC_TENSOR/helmet_test.test.jpg.input.rgb" "$ROOT/assets/gold/input.rgb" 2>/dev/null || true
+cp "$SRC_LOG" "$ROOT/assets/gold/gold_log.txt"
+cp "$SRC_MODEL" "$ROOT/assets/models/helmet_detect_my.rknn"
+
+# 工程包测试图：优先找原始 test.jpg（金张量对应的输入图）
+FOUND_TESTIMG=$(find "$GOLD_SRC" -maxdepth 3 -name 'test.jpg' 2>/dev/null | head -1)
+if [ -n "$FOUND_TESTIMG" ]; then
+    cp "$FOUND_TESTIMG" "$ROOT/projects/helmet_gold/assets/test_images/test.jpg"
+    echo "== test image: $FOUND_TESTIMG"
+else
+    echo "WARN: 未找到原始 test.jpg —— 请自备一张安全帽图放入"
+    echo "      $ROOT/projects/helmet_gold/assets/test_images/test.jpg"
+fi
+echo "== gold fixtures ready:"
+ls -la "$ROOT/assets/gold/" "$ROOT/assets/models/"

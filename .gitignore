@@ -1,0 +1,26 @@
+build*/
+.superpowers/
+/assets/
+/out/
+projects/*/output/
+projects/*/models/
+projects/*/assets/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Rockchip SDK 头文件（专有许可，不随仓库分发；构建时经 RVS_RKNN_INC 指向 SDK）
+engine/third_party/rknn*
+
+# 本地专用脚本（引用私有资产区/本机路径，不入公开仓库；.example 为公开模板）
+scripts/fetch_gold.sh
+scripts/diag_orig_post.sh
+scripts/e2e_gold.sh
+
+# 本地运行产物与本机元数据
+tools/onnx_out/
+tools/*.log
+scrcpy_relay.log
+ff_relay.log
+UPLOAD-CHANGES-PROPOSAL.md

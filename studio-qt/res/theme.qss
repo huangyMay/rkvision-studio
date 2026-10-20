@@ -1,0 +1,127 @@
+/* RKVision Studio · 深空科技主题 */
+* { outline: none; }
+
+QWidget {
+    background: #0d1117;
+    color: #dfe6f0;
+    font-family: "Segoe UI", "Microsoft YaHei UI";
+    font-size: 13px;
+}
+
+/* ---- 顶栏 ---- */
+#Header {
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #10161f, stop:1 #0d1117);
+    border-bottom: 1px solid #1f2733;
+}
+#Header QLabel#AppTitle {
+    color: #00e5ff;
+    font: 800 17px "Consolas";
+    letter-spacing: 2px;
+}
+#Header QLabel#AppSub {
+    color: #5a6a80;
+    font: 500 11px "Consolas";
+    letter-spacing: 1px;
+}
+
+/* ---- 卡片面板 ---- */
+QFrame#Card {
+    background: #141a23;
+    border: 1px solid #26303e;
+    border-radius: 10px;
+}
+QFrame#Card QLabel#CardTitle {
+    color: #6f8199;
+    font: 700 11px "Consolas";
+    letter-spacing: 2px;
+}
+
+/* ---- 状态药丸 ---- */
+QLabel#Pill {
+    border-radius: 9px;
+    padding: 3px 12px;
+    font: 700 11px "Consolas";
+}
+QLabel#PillOk    { background:#12351f; color:#3ecf72; border:1px solid #1e5c34; }
+QLabel#PillBad   { background:#3a1418; color:#ff6b6b; border:1px solid #6b2a2e; }
+QLabel#PillIdle  { background:#1a2230; color:#8b97a8; border:1px solid #2c3849; }
+
+/* ---- 控件 ---- */
+QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {
+    background: #0f141c;
+    border: 1px solid #2c3849;
+    border-radius: 6px;
+    padding: 6px 8px;
+    color: #dfe6f0;
+    selection-background-color: #0e3a52;
+}
+QComboBox:hover, QLineEdit:hover, QDoubleSpinBox:hover { border-color: #3a4a60; }
+QComboBox:focus, QLineEdit:focus, QDoubleSpinBox:focus { border-color: #00e5ff; }
+QComboBox QAbstractItemView {
+    background: #141a23; border: 1px solid #2c3849;
+    selection-background-color: #0e3a52;
+}
+
+QPushButton {
+    background: #16202c;
+    border: 1px solid #2c3849;
+    border-radius: 7px;
+    padding: 8px 12px;
+    color: #dfe6f0;
+    font-weight: 600;
+}
+QPushButton:hover { border-color: #00e5ff; color: #eaffff; }
+QPushButton:pressed { background: #0e3a52; }
+QPushButton:disabled { color: #4a5568; border-color: #1c2430; background: #10151d; }
+QPushButton#Primary {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #0c6a8f, stop:1 #094a66);
+    border: 1px solid #00b3d9;
+}
+QPushButton#Primary:hover { border-color: #00e5ff; }
+QPushButton#Danger:hover { border-color: #ff6b6b; }
+
+/* ---- 日志 ---- */
+QTextEdit#Log {
+    background: #0a0e14;
+    border: 1px solid #1f2733;
+    border-radius: 8px;
+    color: #7ee787;
+    font: 10px "Consolas";
+}
+
+/* ---- 滚动条 ---- */
+QScrollBar:vertical { background: #0d1117; width: 8px; }
+QScrollBar::handle:vertical { background: #2c3849; border-radius: 4px; min-height: 30px; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
+
+/* ---- 推理细节条 ---- */
+QFrame#StatsBar {
+    background: #0a0e14;
+    border: 1px solid #1f2733;
+    border-radius: 8px;
+}
+QLabel#StatsText {
+    color: #3ecf72;
+    font: 11px "Consolas";
+    letter-spacing: 1px;
+}
+
+/* ---- 页面导航栏 ---- */
+QFrame#NavBar {
+    background: #0b1018;
+    border-bottom: 1px solid #1d2c3f;
+}
+QPushButton#NavTab {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 6px 18px;
+    color: #6f7f95;
+    font-weight: 600;
+}
+QPushButton#NavTab:hover { color: #bfeaff; }
+QPushButton#NavTab:checked {
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #0c3a52, stop:1 #092a3c);
+    border: 1px solid #00b3d9;
+    color: #4ff0ff;
+}

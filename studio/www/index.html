@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RKVision Studio</title>
+<style>
+  :root { --bg:#14181f; --panel:#1d232d; --line:#2c3442; --fg:#dfe6f0; --dim:#8b97a8; --acc:#4da3ff; --ok:#3ecf72; --err:#ff6b6b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 "Segoe UI",system-ui,sans-serif; }
+  header { padding:10px 18px; background:var(--panel); border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; }
+  header h1 { font-size:16px; margin:0; }
+  header select, header button { background:#252d3a; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px 10px; }
+  header button { cursor:pointer; }
+  header button:hover { border-color:var(--acc); }
+  main { display:grid; grid-template-columns: 340px 1fr; gap:14px; padding:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .card h2 { font-size:13px; margin:0 0 10px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; }
+  button.act { display:block; width:100%; margin:6px 0; padding:9px; background:#252d3a; color:var(--fg);
+               border:1px solid var(--line); border-radius:8px; cursor:pointer; font-size:14px; }
+  button.act:hover { border-color:var(--acc); }
+  button.act:disabled { opacity:.45; cursor:default; }
+  select.proj { width:100%; padding:7px; background:#252d3a; color:var(--fg); border:1px solid var(--line); border-radius:6px; }
+  #log { height:130px; overflow:auto; font:11px/1.5 Consolas,monospace; color:var(--dim); white-space:pre-wrap; }
+  #preview { width:100%; background:#0b0e13; border-radius:8px; min-height:220px; display:flex; align-items:center; justify-content:center; color:var(--dim); }
+  #preview img { max-width:100%; max-height:70vh; border-radius:8px; }
+  .row { display:flex; gap:8px; } .row > * { flex:1; }
+  .st { font-size:12px; } .ok { color:var(--ok);} .err { color:var(--err);}
+  #shots img { width:120px; border-radius:6px; margin:4px; cursor:pointer; border:1px solid var(--line); }
+</style>
+</head>
+<body>
+<header>
+  <h1>RKVision Studio</h1>
+  <span class="st" id="devstatus">…</span>
+  <span style="flex:1"></span>
+  <label class="st" style="color:var(--dim)">板卡</label>
+  <select id="serial"></select>
+</header>
+<main>
+  <div>
+    <div class="card">
+      <h2>工程</h2>
+      <select class="proj" id="project"></select>
+      <button class="act" id="btn-deploy">① 部署到板</button>
+      <button class="act" id="btn-run">② 运行一遍（图片工程）</button>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h2>摄像头 / 预览</h2>
+      <div class="row">
+        <input id="devport" value="8000" style="background:#252d3a;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px">
+        <input id="localport" value="8000" style="background:#252d3a;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px">
+      </div>
+      <button class="act" id="btn-preview">▶ 启动预览</button>
+      <button class="act" id="btn-stop">■ 停止</button>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h2>日志</h2>
+      <div id="log"></div>
+    </div>
+  </div>
+  <div>
+    <div class="card">
+      <h2>预览（板上 → MJPEG → adb forward）</h2>
+      <div id="preview">未启动</div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h2>运行结果</h2>
+      <button class="act" id="btn-refresh">刷新结果</button>
+      <div id="shots"></div>
+    </div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const log = (m, cls) => { const d = document.createElement('div'); if (cls) d.className = cls;
+  d.textContent = new Date().toLocaleTimeString() + '  ' + m; $('log').appendChild(d); $('log').scrollTop = 1e9; };
+
+async function api(path, body) {
+  const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {};
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({error: 'bad json'}));
+  if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+async function refreshStatus() {
+  try {
+    const s = await api('/api/status');
+    const sel = $('serial');
+    sel.innerHTML = '';
+    (s.devices.length ? s.devices : ['(无设备)']).forEach(d => {
+      const o = document.createElement('option'); o.textContent = d; sel.appendChild(o);
+    });
+    $('project').innerHTML = '';
+    s.projects.forEach(p => { const o = document.createElement('option'); o.textContent = p; $('project').appendChild(o); });
+    const el = $('devstatus');
+    if (s.adb_error) { el.textContent = 'adb 异常'; el.className = 'st err'; }
+    else { el.textContent = s.devices.length ? `在线 ${s.devices.length} 台` : '无设备'; el.className = 'st ' + (s.devices.length ? 'ok' : 'err'); }
+  } catch (e) { log('status: ' + e.message, 'err'); }
+}
+
+$('btn-deploy').onclick = async () => {
+  $('btn-deploy').disabled = true;
+  try { await api('/api/deploy', {project: $('project').value, serial: $('serial').value});
+        log('部署完成', 'ok'); } catch (e) { log('部署失败: ' + e.message, 'err'); }
+  $('btn-deploy').disabled = false;
+};
+$('btn-run').onclick = async () => {
+  $('btn-run').disabled = true; log('运行中…');
+  try { const r = await api('/api/run', {project: $('project').value, serial: $('serial').value});
+        log('完成: ' + r.summary, 'ok'); $('btn-refresh').click();
+  } catch (e) { log('运行失败: ' + e.message, 'err'); }
+  $('btn-run').disabled = false;
+};
+$('btn-preview').onclick = async () => {
+  try {
+    const r = await api('/api/preview/start', {project: $('project').value, serial: $('serial').value,
+                    device_port: +$('devport').value, local_port: +$('localport').value});
+    $('preview').innerHTML = `<img src="${r.stream_url}?t=${Date.now()}">`;
+    log('预览已启动: ' + r.stream_url, 'ok');
+  } catch (e) { log('预览失败: ' + e.message, 'err'); }
+};
+$('btn-stop').onclick = async () => {
+  try { await api('/api/preview/stop', {serial: $('serial').value, local_port: +$('localport').value});
+        $('preview').innerHTML = '已停止'; log('预览已停止'); } catch (e) { log(e.message, 'err'); }
+};
+$('btn-refresh').onclick = async () => {
+  try {
+    const p = $('project').value;
+    const r = await api('/api/results?project=' + p);
+    $('shots').innerHTML = '';
+    r.files.filter(f => f.endsWith('.jpg')).slice(-8).forEach(f => {
+      const img = document.createElement('img');
+      img.src = `/api/file?project=${p}&name=${encodeURIComponent(f)}`;
+      img.title = f; img.onclick = () => window.open(img.src);
+      $('shots').appendChild(img);
+    });
+  } catch (e) { log(e.message, 'err'); }
+};
+
+refreshStatus();
+setInterval(refreshStatus, 5000);
+</script>
+</body>
+</html>

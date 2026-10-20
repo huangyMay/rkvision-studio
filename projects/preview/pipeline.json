@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "preview",
+  "target": { "platform": "rk3576", "runtime": "android-native", "core_mask": "auto" },
+  "pipeline": [
+    { "id": "src", "plugin": "image_dir", "params": { "path": "imgs", "loop": true } },
+    { "id": "out", "plugin": "mjpeg",     "params": { "port": 8000, "path": "/stream", "fps": 10, "draw": true } }
+  ]
+}

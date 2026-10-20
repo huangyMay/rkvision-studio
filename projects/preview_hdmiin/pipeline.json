@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "preview_hdmiin",
+  "target": { "platform": "rk3576", "runtime": "android-native", "core_mask": "auto" },
+  "pipeline": [
+    { "id": "src", "plugin": "v4l2",  "params": { "device": "/dev/video0", "width": 1920, "height": 1080, "prefer_mjpeg": false } },
+    { "id": "out", "plugin": "mjpeg", "params": { "port": 8000, "path": "/stream", "fps": 10, "draw": false } }
+  ]
+}

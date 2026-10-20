@@ -1,0 +1,124 @@
+#pragma once
+// 主窗口：组装各面板、连接 core 服务层信号槽
+#include <QMainWindow>
+
+class AdbClient;
+class BoardMonitor;
+class BoardPerfRunner;
+class InferStream;
+class MjpegClient;
+class OnnxAnalyzer;
+class OnnxRunner;
+class PreviewWidget;
+class RknnSimRunner;
+class QCheckBox;
+class QComboBox;
+class QDoubleSpinBox;
+class QFrame;
+class QLabel;
+class QLineEdit;
+class QMediaPlayer;
+class QPushButton;
+class QStackedWidget;
+class QTextEdit;
+class QVideoSink;
+
+struct OnnxResult;
+struct OnnxAnalysis;
+struct BoardPerf;
+
+class MainWindow : public QMainWindow {
+    Q_OBJECT
+public:
+    explicit MainWindow(QWidget *parent = nullptr);
+
+private slots:
+    void refreshStatus();
+    void onDeploy();
+    void onRun();
+    void onPreviewStart();
+    void onPreviewStop();
+    void onInfer();
+    void onAnalyze();
+    void onNetronView();
+    void onRknnSim();
+    void onBoardPerf();
+    void appendLog(const QString &msg, const QString &color = {});
+
+public slots:
+    void autoStartRtsp(const QString &url);   // 截图回归/一键演示用
+    void autoRunInfer(const QString &image, const QString &model); // 截图回归用
+    void autoRunRknnSim(const QString &image, const QString &model,
+                        const QString &meanstd);                   // 截图回归用
+    void autoLiveInfer(const QString &model);                      // LIVE 实时推理回归
+    void autoDeploy(const QString &project, const QString &serial = {}); // 部署回归
+
+private:
+    void buildUi();
+    QImage annotateImage(const OnnxResult &r);   // 载入图片并画检测框（两个 LAB 共用）
+    void drawInferResult(const OnnxResult &r);
+    void showAnalysis(const OnnxAnalysis &a);
+    AdbClient makeAdb() const;
+
+    // 顶栏
+    QLabel *m_devicePill = nullptr;
+    QComboBox *m_serialBox = nullptr;
+    // 左列
+    QComboBox *m_projectBox = nullptr;
+    QComboBox *m_sourceBox = nullptr;
+    QLineEdit *m_rtspUrl = nullptr;
+    QPushButton *m_btnDeploy = nullptr;
+    QPushButton *m_btnRun = nullptr;
+    QPushButton *m_btnPreview = nullptr;
+    QPushButton *m_btnStop = nullptr;
+    // 本地 ONNX 验证卡
+    QLineEdit *m_modelPath = nullptr;
+    QLineEdit *m_imagePath = nullptr;
+    QDoubleSpinBox *m_confSpin = nullptr;      // 置信度阈值
+    QDoubleSpinBox *m_iouSpin = nullptr;       // NMS IoU 阈值
+    QPushButton *m_btnInfer = nullptr;
+    QPushButton *m_btnAnalyze = nullptr;       // 📊 模型分析
+    QPushButton *m_btnNetron = nullptr;        // 🔍 Netron 查看
+    OnnxRunner *m_onnx = nullptr;
+    OnnxAnalyzer *m_analyzer = nullptr;
+    class QProcess *m_netronProc = nullptr;
+    // 右主区（LIVE 页）
+    PreviewWidget *m_preview = nullptr;
+    QVideoSink *m_sink = nullptr;              // RTSP 模式解码帧出口
+    QMediaPlayer *m_player = nullptr;
+    QLabel *m_boardStats = nullptr;            // 板端 CPU/内存/NPU/温度 状态条
+    BoardMonitor *m_bmon = nullptr;
+    // LIVE 左列推理信息卡
+    QTextEdit *m_inferInfo = nullptr;
+    // ONNX LAB 页
+    QStackedWidget *m_views = nullptr;         // 页面栈：0=LIVE 1=ONNX LAB 2=RKNN LAB
+    QPushButton *m_navLive = nullptr;          // 导航页签（与页面栈双向同步）
+    QPushButton *m_navInfer = nullptr;
+    QPushButton *m_navRknn = nullptr;
+    PreviewWidget *m_inferPreview = nullptr;   // 推理结果大屏
+    QLabel *m_inferStats = nullptr;            // 推理细节条
+    // RKNN LAB 页（toolkit2 模拟器）
+    QLineEdit *m_rkModelPath = nullptr;        // .onnx（模拟输入是 ONNX+转换配置）
+    QLineEdit *m_rkImagePath = nullptr;
+    QLineEdit *m_rkMeanStd = nullptr;          // "0,0,0|255,255,255" / "none|none"
+    QLineEdit *m_rkSavePath = nullptr;         // 可选：build 产出的 .rknn 保存路径
+    QDoubleSpinBox *m_rkConfSpin = nullptr;
+    QDoubleSpinBox *m_rkIouSpin = nullptr;
+    QPushButton *m_btnRkSim = nullptr;
+    QPushButton *m_btnBoardPerf = nullptr;     // 📡 板端 NPU 性能
+    RknnSimRunner *m_rknn = nullptr;
+    BoardPerfRunner *m_boardPerf = nullptr;
+    PreviewWidget *m_rkPreview = nullptr;
+    QLabel *m_rkStats = nullptr;
+    // LIVE 页 PC 实时推理
+    QCheckBox *m_ckLiveInfer = nullptr;        // ⚡ PC 实时推理开关
+    QLineEdit *m_liveModelPath = nullptr;      // ONNX 模型（预览流叠加用）
+    InferStream *m_istream = nullptr;
+    // 日志
+    QTextEdit *m_log = nullptr;
+
+    MjpegClient *m_mjpeg = nullptr;
+    int m_frames = 0;
+    qint64 m_lastFpsMs = 0;
+    double m_liveInferMs = 0;                  // 最近一次 PC 实时推理耗时（状态行显示用）
+};

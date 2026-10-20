@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "name": "smoke",
+  "target": { "platform": "rk3566", "runtime": "android-native", "core_mask": "auto" },
+  "pipeline": [
+    { "id": "src", "plugin": "image_dir",  "params": { "path": "imgs" } },
+    { "id": "pre", "plugin": "letterbox",  "params": { "size": 640, "pad_value": 255 } },
+    { "id": "out", "plugin": "image_out",  "params": { "path": "output", "draw": true, "save_json": true } }
+  ]
+}
