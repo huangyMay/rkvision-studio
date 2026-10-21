@@ -189,6 +189,18 @@ ls /tmp/rknn_acc_out/runtime/dumps/ | wc -l
 
 若 ⑥ 卡死在 `adbd is already running as root` 之后 → ⑤ 的保活循环没在跑。
 
+### 6.1 另一种场景：重启的是 Windows 电脑（板子没动）
+
+板端一切照旧（rknn_server 进程、5555 自听都不受 PC 重启影响），只有 PC 侧两件事要重做：
+
+```powershell
+# ① 管理员终端：静态 ARP（Windows 重启清零，影子设备会重新抢答 .96）
+netsh interface ip add neighbors "以太网 2" 192.168.0.96 6C-05-D3-06-57-57
+```
+
+- ② mediamtx.exe 双击启动（要用 RTSP 预览时）——它同样不自启
+- WSL/toolkit2/数据（`assets/acc/` 在 WSL 磁盘 VHD 上）全部持久，无需任何操作
+
 ## 7. 方法论沉淀
 
 - **卡点先搜后试**：本次最大的弯路（usbipd/ARP 的一长串尝试）始于没先搜"accuracy_analysis 别人怎么跑"——一搜就发现 load_rknn 限制和官方流程。先查官方文档与社区做法，再动手。
