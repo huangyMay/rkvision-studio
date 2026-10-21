@@ -132,5 +132,6 @@ if(RVS_TARGET STREQUAL "host")
              stages/source_image_dir.cpp stages/preprocess_letterbox.cpp stages/postprocess_yolov5.cpp
              stages/sink_image_out.cpp stages/infer_rknn_stub.cpp)
     rvs_test(test_mjpeg tests/test_mjpeg.cpp core/registry.cpp stages/sink_mjpeg.cpp)
+    rvs_test(test_judge tests/test_judge.cpp core/registry.cpp stages/judge.cpp)
     rvs_test(gold_regression tests/gold_regression.cpp core/registry.cpp stages/postprocess_yolov5.cpp)
 endif()
