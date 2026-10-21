@@ -4,6 +4,7 @@
 //   count/persist/regex = 判决规则（对过滤后结果评估，命中=违规）；
 //   verdict 字段 ANY_NG/ALL_OK 在 v1 语义下等价，由壳层持有，字段为模板 C 预留。
 #pragma once
+#include <algorithm>
 #include <cfloat>
 #include <climits>
 #include <regex>
@@ -31,7 +32,6 @@ struct JudgeRule {
 struct JudgeVerdict {
     bool ng = false;
     nlohmann::json detail;                  // {"violations":[{rule,type,cls,actual}...]}
-    std::vector<int> persist_counters;      // 与 persist 规则下标对齐（帧间状态，调用方持有）
 };
 
 struct JudgeCore {
@@ -42,7 +42,8 @@ struct JudgeCore {
     static std::vector<Detection> ApplyFilters(const std::vector<JudgeRule>& rules,
                                                const std::vector<Detection>& in);
 
-    // 对过滤后的检出评估判决规则；persist_counters 由调用方跨帧持有
+    // 对过滤后的检出评估判决规则；persist_counters 就地改写、由调用方跨帧持有
+    // （下标=规则下标；-1=该规则已锁存）
     static JudgeVerdict Evaluate(const std::vector<JudgeRule>& rules,
                                  const std::vector<Detection>& detections,
                                  std::vector<int>* persist_counters);

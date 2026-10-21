@@ -91,8 +91,6 @@ JudgeVerdict JudgeCore::Evaluate(const std::vector<JudgeRule>& rules,
                                  const std::vector<Detection>& detections,
                                  std::vector<int>* persist_counters) {
     JudgeVerdict v;
-    if (persist_counters)
-        v.persist_counters.assign(persist_counters->begin(), persist_counters->end());
     nlohmann::json violations = nlohmann::json::array();
 
     auto cls_match = [](const JudgeRule& r, const Detection& d) {
@@ -122,11 +120,30 @@ JudgeVerdict JudgeCore::Evaluate(const std::vector<JudgeRule>& rules,
             if (bad > 0)
                 violations.push_back({{"rule", i}, {"type", "regex"},
                                       {"cls", r.cls}, {"actual", bad}});
+        } else if (r.type == "persist") {
+            // 去抖状态机：连续 frames 帧有匹配检出计数 +1，断流清零；
+            // 达阈值置违规并锁存（counter=-1），锁存后每帧 ng=true 直至流水线重建
+            if (persist_counters->size() <= i) persist_counters->resize(i + 1, 0);
+            int& c = (*persist_counters)[i];
+            const bool hit = std::any_of(detections.begin(), detections.end(),
+                                         [&](const Detection& d) { return cls_match(r, d); });
+            if (c < 0) {                     // 已锁存
+                v.ng = true;
+            } else if (hit) {
+                ++c;
+                if (c >= r.frames) {
+                    c = -1;
+                    v.ng = true;
+                    violations.push_back({{"rule", i}, {"type", "persist"},
+                                          {"cls", r.cls}, {"actual", r.frames}});
+                }
+            } else {
+                c = 0;
+            }
         }
-        // persist 在 Task 3 接入（Task 2 测试不覆盖）
     }
 
     v.detail = {{"violations", violations}};
-    v.ng = !violations.empty();
+    v.ng = v.ng || !violations.empty();
     return v;
 }

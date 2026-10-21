@@ -130,6 +130,39 @@ int main() {
         CHECK(v2.ng);                                   // 有检出越 [0,0] 窗 → 违规
     }
 
+    // ⑧ persist 去抖状态机（Task 3）：连续 frames 帧有检出才置位，断流清零，置位后锁存
+    {
+        auto rules = JudgeCore::ParseRules(json::array({
+            json{{"type", "persist"}, {"class", "person"}, {"frames", 3}}}));
+        std::vector<int> counters(rules.size(), 0);
+        auto det = {Det("person", 0.9f, 0, 0, 5, 5)};
+        auto v1 = JudgeCore::Evaluate(rules, det, &counters);        // 1/3
+        CHECK(!v1.ng && counters[0] == 1);
+        CHECK(!JudgeCore::Evaluate(rules, det, &counters).ng);       // 2/3
+        auto v3 = JudgeCore::Evaluate(rules, det, &counters);        // 3/3 → 置位+锁存
+        CHECK(v3.ng && counters[0] == -1);
+        CHECK(v3.detail["violations"][0]["type"] == "persist");
+        CHECK(JudgeCore::Evaluate(rules, {}, &counters).ng);         // 断流但锁存保持
+        CHECK(counters[0] == -1);
+
+        // frames=5 的平行序列：2 帧→断流清零→2 帧，永不置位
+        auto rules5 = JudgeCore::ParseRules(json::array({
+            json{{"type", "persist"}, {"class", "person"}, {"frames", 5}}}));
+        std::vector<int> c5(rules5.size(), 0);
+        CHECK(!JudgeCore::Evaluate(rules5, det, &c5).ng);
+        CHECK(!JudgeCore::Evaluate(rules5, det, &c5).ng);
+        CHECK(!JudgeCore::Evaluate(rules5, {}, &c5).ng && c5[0] == 0);   // 断流清零
+        CHECK(!JudgeCore::Evaluate(rules5, det, &c5).ng);
+        CHECK(!JudgeCore::Evaluate(rules5, det, &c5).ng);
+
+        // 全空帧序列恒 OK；cls 不匹配不计数
+        std::vector<int> c6(rules.size(), 0);
+        for (int k = 0; k < 6; ++k) CHECK(!JudgeCore::Evaluate(rules, {}, &c6).ng);
+        std::vector<int> c7(rules.size(), 0);
+        CHECK(!JudgeCore::Evaluate(rules, {Det("helmet", 0.9f, 0, 0, 5, 5)}, &c7).ng);
+        CHECK(c7[0] == 0);
+    }
+
     printf("test_judge: all checks passed\n");
     return 0;
 }
