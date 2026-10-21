@@ -80,6 +80,10 @@ int main(int argc, char *argv[]) {
         QTimer::singleShot(60000, &w, []() { QApplication::quit(); });  // 部署完自动退出
     }
 
+    const int wfViewIdx = args.indexOf(QStringLiteral("--workflow"));
+    if (wfViewIdx >= 0)
+        QTimer::singleShot(300, &w, [&w]() { w.autoShowWorkflow(); });
+
     // 截图模式：--screenshot <out.png> —— 渲染后存盘退出（配合上面任一触发器）
     const int shotIdx = args.indexOf(QStringLiteral("--screenshot"));
     if (shotIdx >= 0 && args.size() > shotIdx + 1) {

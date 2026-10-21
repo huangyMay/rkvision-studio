@@ -25,6 +25,7 @@ add_executable(rvs_studio
     src/model/workflowgen.cpp
     # ui 界面层
     src/ui/mainwindow.cpp
+    src/ui/workflowpage.cpp
     src/ui/widgets/previewwidget.cpp
     res/res.qrc
 )

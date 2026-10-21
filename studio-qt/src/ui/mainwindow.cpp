@@ -9,6 +9,7 @@
 #include "core/onnxrunner.h"
 #include "core/projectregistry.h"
 #include "core/rknnsimrunner.h"
+#include "ui/workflowpage.h"
 #include "ui/widgets/previewwidget.h"
 
 #include <QButtonGroup>
@@ -47,6 +48,8 @@
 namespace {
 constexpr int kPreviewPort = 18080;   // adb forward 本地端口 → 板上 :8000
 const char *kProjectsRoot = PROJECTS_ROOT;
+
+QString resolveProjectsRoot();     // 定义在 buildUi 之后（同一匿名命名空间）
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
@@ -194,17 +197,23 @@ void MainWindow::buildUi() {
     auto *navRknn = new QPushButton(QStringLiteral("🧩 RKNN LAB / 模拟推理"));
     navRknn->setObjectName("NavTab");
     navRknn->setCheckable(true);
+    auto *navWorkflow = new QPushButton(QStringLiteral("🛠 WORKFLOW / 工作流"));
+    navWorkflow->setObjectName("NavTab");
+    navWorkflow->setCheckable(true);
     m_navLive = navLive;
     m_navInfer = navInfer;
     m_navRknn = navRknn;
+    m_navWorkflow = navWorkflow;
     auto *navGroup = new QButtonGroup(this);
     navGroup->setExclusive(true);
     navGroup->addButton(navLive);
     navGroup->addButton(navInfer);
     navGroup->addButton(navRknn);
+    navGroup->addButton(navWorkflow);
     nl->addWidget(navLive);
     nl->addWidget(navInfer);
     nl->addWidget(navRknn);
+    nl->addWidget(navWorkflow);
     nl->addStretch();
     root->addWidget(nav);
 
@@ -539,6 +548,7 @@ void MainWindow::buildUi() {
     connect(navLive, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(0); });
     connect(navInfer, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(1); });
     connect(navRknn, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(2); });
+    connect(m_navWorkflow, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(3); });
 
     // ---- 页 2：RKNN LAB 模拟推理（toolkit2 模拟器：ONNX+转换配置 → build → 模拟） ----
     auto *pageRknn = new QWidget;
@@ -652,6 +662,23 @@ void MainWindow::buildUi() {
     auto *statusTimer = new QTimer(this);
     connect(statusTimer, &QTimer::timeout, this, &MainWindow::refreshStatus);
     statusTimer->start(5000);
+
+    // ---- 页 3：WORKFLOW 工作流配置器（表单 → pipeline.json → 部署链）----
+    // 最后 addWidget：页面栈顺序 LIVE/ONNX/RKNN/WORKFLOW
+    m_workflow = new WorkflowPage(resolveProjectsRoot());
+    m_views->addWidget(m_workflow);
+    connect(m_workflow, &WorkflowPage::projectSaved, this, [this](const QString &name) {
+        refreshStatus();                            // 重新扫描 projects/，新工程进下拉
+        const int pi = m_projectBox->findText(name);
+        if (pi >= 0) m_projectBox->setCurrentIndex(pi);
+        appendLog(QStringLiteral("工程已保存并选中: %1（去 LIVE 页可运行）").arg(name), "#3ecf72");
+    });
+    connect(m_workflow, &WorkflowPage::deployRequested, this, [this](const QString &name) {
+        m_views->setCurrentIndex(0);
+        m_navLive->setChecked(true);
+        autoDeploy(name);
+    });
+    connect(m_workflow, &WorkflowPage::logLine, this, &MainWindow::appendLog);
 }
 
 AdbClient MainWindow::makeAdb() const {
@@ -960,6 +987,11 @@ void MainWindow::autoRunRknnSim(const QString &image, const QString &model,
     m_rkModelPath->setText(model);
     if (!meanstd.isEmpty()) m_rkMeanStd->setText(meanstd);
     onRknnSim();
+}
+
+void MainWindow::autoShowWorkflow() {
+    m_views->setCurrentIndex(3);               // 截图回归切到 WORKFLOW 页
+    m_navWorkflow->setChecked(true);
 }
 
 void MainWindow::autoLiveInfer(const QString &model) {

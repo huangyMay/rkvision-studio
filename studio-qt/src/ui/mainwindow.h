@@ -11,6 +11,7 @@ class OnnxAnalyzer;
 class OnnxRunner;
 class PreviewWidget;
 class RknnSimRunner;
+class WorkflowPage;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -52,6 +53,7 @@ public slots:
                         const QString &meanstd);                   // 截图回归用
     void autoLiveInfer(const QString &model);                      // LIVE 实时推理回归
     void autoDeploy(const QString &project, const QString &serial = {}); // 部署回归
+    void autoShowWorkflow();                                       // 截图回归：切 WORKFLOW 页
 
 private:
     void buildUi();
@@ -91,10 +93,12 @@ private:
     // LIVE 左列推理信息卡
     QTextEdit *m_inferInfo = nullptr;
     // ONNX LAB 页
-    QStackedWidget *m_views = nullptr;         // 页面栈：0=LIVE 1=ONNX LAB 2=RKNN LAB
+    QStackedWidget *m_views = nullptr;         // 页面栈：0=LIVE 1=ONNX LAB 2=RKNN LAB 3=WORKFLOW
     QPushButton *m_navLive = nullptr;          // 导航页签（与页面栈双向同步）
     QPushButton *m_navInfer = nullptr;
     QPushButton *m_navRknn = nullptr;
+    QPushButton *m_navWorkflow = nullptr;
+    WorkflowPage *m_workflow = nullptr;        // 工作流配置器（第四页）
     PreviewWidget *m_inferPreview = nullptr;   // 推理结果大屏
     QLabel *m_inferStats = nullptr;            // 推理细节条
     // RKNN LAB 页（toolkit2 模拟器）
