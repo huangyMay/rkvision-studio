@@ -72,6 +72,7 @@ set(ENGINE_SOURCES
     stages/postprocess_yolov5.cpp
     stages/postprocess_yolov8.cpp
     stages/judge.cpp
+    stages/sink_archive.cpp
     stages/sink_image_out.cpp
     stages/sink_mjpeg.cpp
 )
@@ -134,5 +135,6 @@ if(RVS_TARGET STREQUAL "host")
              stages/sink_image_out.cpp stages/infer_rknn_stub.cpp)
     rvs_test(test_mjpeg tests/test_mjpeg.cpp core/registry.cpp stages/sink_mjpeg.cpp)
     rvs_test(test_judge tests/test_judge.cpp core/registry.cpp stages/judge.cpp)
+    rvs_test(test_archive tests/test_archive.cpp core/registry.cpp stages/sink_archive.cpp)
     rvs_test(gold_regression tests/gold_regression.cpp core/registry.cpp stages/postprocess_yolov5.cpp)
 endif()
