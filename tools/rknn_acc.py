@@ -24,6 +24,21 @@ from onnx_infer import norm_path  # noqa: E402
 HOME_BIN = os.environ.get("RVS_BOARD_BIN") or os.path.expanduser("~/bin")
 
 
+def adb_path_prepend():
+    """PATH 前插 adb：优先 toolkit2 自带 Linux adb（同包自带，网络/USB 通吃），
+    回退 ~/bin wrapper。顺序很重要——网络路线必须用 Linux 原生 adb。"""
+    try:
+        import rknn  # noqa: F401
+        private = os.path.join(os.path.dirname(os.path.dirname(rknn.__file__)),
+                               "3rdparty", "platform-tools", "adb", "linux-x86_64")
+        if os.path.isdir(private):
+            os.environ["PATH"] = private + os.pathsep + os.environ.get("PATH", "")
+            return
+    except Exception:
+        pass
+    os.environ["PATH"] = HOME_BIN + os.pathsep + os.environ.get("PATH", "")
+
+
 def parse_error_analysis(path):
     """error_analysis.txt → [{name, cosine}]（兼容 2.3.x 的表格排版）。"""
     layers = []
@@ -49,7 +64,7 @@ def main():
     image = norm_path(sys.argv[3]) if len(sys.argv) > 3 else None
     out_dir = norm_path(sys.argv[4]) if len(sys.argv) > 4 else "/tmp/rknn_acc_out"
 
-    os.environ["PATH"] = HOME_BIN + os.pathsep + os.environ.get("PATH", "")
+    adb_path_prepend()
 
     from rknn.api import RKNN
     rknn = RKNN(verbose=False)
