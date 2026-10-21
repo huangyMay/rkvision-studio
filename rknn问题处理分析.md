@@ -146,7 +146,45 @@ python3 -u tools/rknn_acc.py ...   # -u 关闭缓冲，进度实时可见
 | `usbipd attach` 报 busy/exported | 僵尸 attach | `wsl --shutdown` 后重来 |
 | `pip install rknn-toolkit2` 找不到版本 | PyPI 无此包/无 win wheel | 用官方仓库/本地 Linux wheel |
 
-## 6. 方法论沉淀
+## 6. 板子重启后的手工恢复清单（accuracy_analysis 按序执行）
+
+> 前提：板子已连 WiFi、与 PC 同网段；WSL toolkit2 已装（§2）；dataset.txt 已备。
+> `persist.adb.tcp.port=5555` 已设置——理论上开机会自动监听，**先做第 1 步验证，不通再做第 2 步**。
+
+```bash
+# ① 验证 5555 是否开机自听（在 PC 或 WSL 上）
+#    通了 → 直接跳第 3 步；拒绝 → 做第 ② 步（需要 USB 线连着板子）
+adb connect <板IP>:5555
+
+# ② USB 在位时：adbd 恢复 root + 重开 TCP
+adb -s <板序列号> root
+adb -s <板序列号> tcpip 5555
+
+# ③ 起 rknn_server（每次开机都必须，进程不持久）
+adb -s <设备> shell "LD_LIBRARY_PATH=/data/local/tmp/rvs nohup /data/local/tmp/rknn_server >/data/local/tmp/rknn_server.log 2>&1 &"
+
+# ④ WSL 侧连板（toolkit2 私有 adb）
+~/.local/lib/python3.10/site-packages/rknn/3rdparty/platform-tools/adb/linux-x86_64/adb connect <板IP>:5555
+
+# ⑤ 保活循环（后台挂着；accuracy_analysis 内部 adb root 会断网络传输，无此步必挂死）
+( for i in $(seq 1 300); do
+    ~/.local/lib/python3.10/site-packages/rknn/3rdparty/platform-tools/adb/linux-x86_64/adb connect <板IP>:5555
+    ~/.local/lib/python3.10/site-packages/rknn/3rdparty/platform-tools/adb/linux-x86_64/adb root
+    sleep 3
+  done ) &
+
+# ⑥ 跑分析（-u 实时看进度）
+cd <仓库根>
+python3 -u tools/rknn_acc.py <onnx> <dataset.txt> <板IP>:5555
+
+# ⑦ 看结果
+cat /tmp/rknn_acc_out/error_analysis.txt
+ls /tmp/rknn_acc_out/runtime/dumps/ | wc -l
+```
+
+若 ⑥ 卡死在 `adbd is already running as root` 之后 → ⑤ 的保活循环没在跑。
+
+## 7. 方法论沉淀
 
 - **卡点先搜后试**：本次最大的弯路（usbipd/ARP 的一长串尝试）始于没先搜"accuracy_analysis 别人怎么跑"——一搜就发现 load_rknn 限制和官方流程。先查官方文档与社区做法，再动手。
 - **每个"不可能"都要留一次实测**：比如"外部连不上但本机能连"这一对矛盾现象，直接指向了 ARP 冲突。
