@@ -1,5 +1,7 @@
 # RKVision Studio
 
+[![ci](https://github.com/huangyMay/rkvision-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/huangyMay/rkvision-studio/actions/workflows/ci.yml)
+
 > 把「模型 → RKNN → 板上 NPU → 实时画面」这条链，装进一个工作台。
 > One workbench for the whole edge-AI chain: model → RKNN → on-board NPU → live video.
 
