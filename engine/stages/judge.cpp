@@ -1,6 +1,102 @@
 #include "stages/judge.hpp"
 
 #include <cctype>
+#include <cstdio>
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#include <opencv2/imgcodecs.hpp>
+
+#include "core/registry.hpp"
+
+REGISTER_STAGE("judge", JudgeStage)
+
+static void MkdirP(const std::string& path) {
+    std::string cur;
+    for (size_t i = 0; i < path.size(); ++i) {
+        cur += path[i];
+        if (path[i] == '/' && i > 0) mkdir(cur.c_str(), 0755);
+    }
+    mkdir(path.c_str(), 0755);
+}
+
+int JudgeStage::Init(const nlohmann::json& params, const StageContext& ctx) {
+    if (!params.is_object()) {
+        fprintf(stderr, "judge: params must be an object\n");
+        return -1;
+    }
+    try {
+        rules_ = JudgeCore::ParseRules(params.value("rules", nlohmann::json::array()));
+    } catch (const std::exception& e) {
+        fprintf(stderr, "judge: %s\n", e.what());
+        return -1;
+    }
+    verdict_mode_ = params.value("verdict", "ANY_NG");
+    if (verdict_mode_ != "ANY_NG" && verdict_mode_ != "ALL_OK") {
+        fprintf(stderr, "judge: verdict must be ANY_NG or ALL_OK, got %s\n", verdict_mode_.c_str());
+        return -1;
+    }
+    actions_.clear();
+    if (params.contains("actions")) {
+        if (!params["actions"].is_array()) {
+            fprintf(stderr, "judge: actions must be an array\n");
+            return -1;
+        }
+        for (const auto& a : params["actions"]) {
+            if (!a.is_string()) {
+                fprintf(stderr, "judge: actions entries must be strings\n");
+                return -1;
+            }
+            std::string s = a.get<std::string>();
+            if (s.rfind("plc_write:", 0) == 0 || s.rfind("http:", 0) == 0) {
+                fprintf(stderr, "judge: action '%s' needs M-c (Modbus/HTTP), not supported in v1\n",
+                        s.c_str());
+                return -1;
+            }
+            if (s.rfind("snapshot:", 0) == 0) {
+                std::string dir = s.substr(strlen("snapshot:"));
+                if (!dir.empty() && dir[0] != '/' && !ctx.project_root.empty())
+                    dir = ctx.project_root + "/" + dir;
+                actions_.push_back("snapshot:" + dir);
+            } else if (s.rfind("log:", 0) == 0) {
+                actions_.push_back(s);
+            } else {
+                fprintf(stderr, "judge: unknown action '%s' (v1: log:/snapshot:)\n", s.c_str());
+                return -1;
+            }
+        }
+    }
+    counters_.assign(rules_.size(), 0);
+    return 0;
+}
+
+void JudgeStage::RunActions(const Frame& frame, bool ng) {
+    for (const std::string& a : actions_) {
+        if (a.rfind("log:", 0) == 0) {
+            fprintf(stderr, "judge[%s] %s: %s\n", ng ? "NG" : "OK",
+                    frame.image_name.c_str(), a.c_str() + strlen("log:"));
+        } else if (a.rfind("snapshot:", 0) == 0) {
+            const std::string dir = a.substr(strlen("snapshot:"));
+            MkdirP(dir);
+            const cv::Mat img = frame.orig_image.empty() ? frame.image : frame.orig_image;
+            const std::string base = dir + "/" +
+                (frame.image_name.empty() ? "frame" : frame.image_name) + "_ng.jpg";
+            if (!cv::imwrite(base, img))
+                fprintf(stderr, "judge: snapshot imwrite failed: %s\n", base.c_str());
+        }
+    }
+}
+
+bool JudgeStage::Process(Frame& frame) {
+    const size_t before = frame.detections.size();
+    frame.detections = JudgeCore::ApplyFilters(rules_, frame.detections);
+    const JudgeVerdict v = JudgeCore::Evaluate(rules_, frame.detections, &counters_);
+    frame.verdict = v.ng ? "NG" : "OK";
+    frame.judge = v.detail;
+    frame.judge["filtered"] = before - frame.detections.size();
+    if (v.ng) RunActions(frame, true);
+    return true;
+}
 
 std::vector<JudgeRule> JudgeCore::ParseRules(const nlohmann::json& rules) {
     if (!rules.is_array()) throw std::runtime_error("judge.rules must be an array");

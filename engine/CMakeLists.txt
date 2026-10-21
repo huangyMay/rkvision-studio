@@ -71,6 +71,7 @@ set(ENGINE_SOURCES
     stages/preprocess_letterbox.cpp
     stages/postprocess_yolov5.cpp
     stages/postprocess_yolov8.cpp
+    stages/judge.cpp
     stages/sink_image_out.cpp
     stages/sink_mjpeg.cpp
 )

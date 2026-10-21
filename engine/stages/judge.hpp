@@ -16,6 +16,7 @@
 #include <opencv2/core.hpp>
 
 #include "core/frame.hpp"
+#include "core/stage.hpp"
 
 struct JudgeRule {
     std::string type;                       // count|score|size|region|persist|regex
@@ -49,4 +50,23 @@ struct JudgeCore {
                                  std::vector<int>* persist_counters);
 
     static bool PointInPolygon(float px, float py, const std::vector<cv::Point2f>& poly);
+};
+
+// ---- IStage 壳：pipeline.json 的 judge 节点（过滤回写 detections，写 Frame.verdict/judge）----
+class JudgeStage : public IStage {
+public:
+    int Init(const nlohmann::json& params, const StageContext& ctx) override;
+    bool Process(Frame& frame) override;
+    const StageMeta& Meta() const override {
+        static StageMeta m{"judge", false, false, false};
+        return m;
+    }
+
+private:
+    void RunActions(const Frame& frame, bool ng);
+
+    std::vector<JudgeRule> rules_;
+    std::string verdict_mode_ = "ANY_NG";   // v1：ANY_NG/ALL_OK 结果等价，字段为模板 C 预留
+    std::vector<std::string> actions_;      // v1: log:<tag> / snapshot:<已解析绝对目录>
+    std::vector<int> counters_;             // persist 状态机（跨帧）
 };

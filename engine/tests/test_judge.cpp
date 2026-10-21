@@ -1,4 +1,5 @@
-// Task 2/3: JudgeCore 规则求值行为规格（过滤器 + 判决规则 + persist 状态机）
+// Task 2/3/4: JudgeCore 规则求值 + judge stage 行为规格
+#include "core/registry.hpp"
 #include "stages/judge.hpp"
 
 #include <cstdio>
@@ -161,6 +162,59 @@ int main() {
         std::vector<int> c7(rules.size(), 0);
         CHECK(!JudgeCore::Evaluate(rules, {Det("helmet", 0.9f, 0, 0, 5, 5)}, &c7).ng);
         CHECK(c7[0] == 0);
+    }
+
+    // ⑨ judge stage（Task 4）：注册名 / Init 校验 / Process 全链
+    {
+        CHECK(StageRegistry::Instance().Create("judge") != nullptr);
+    }
+    {   // 未知规则类型 → Init 非 0
+        JudgeStage j;
+        StageContext ctx;
+        ctx.project_root = "/tmp/rvs_test_judge";
+        nlohmann::json p = {{"rules", nlohmann::json::array({nlohmann::json{{"type", "bogus"}}})}};
+        CHECK(j.Init(p, ctx) != 0);
+    }
+    {   // v1 拒绝 plc_write/http 动作（M-c 实现）
+        JudgeStage j;
+        StageContext ctx;
+        ctx.project_root = "/tmp/rvs_test_judge";
+        nlohmann::json p = {{"rules", nlohmann::json::array({nlohmann::json{{"type", "count"}, {"min", 0}, {"max", 99}}})},
+                            {"actions", nlohmann::json::array({"plc_write:D100=1"})}};
+        CHECK(j.Init(p, ctx) != 0);
+    }
+    {   // count 全链：过滤→判决→写 Frame；空帧恒 OK（Review Focus 3）
+        JudgeStage j;
+        StageContext ctx;
+        ctx.project_root = "/tmp/rvs_test_judge";
+        nlohmann::json p = {{"rules", nlohmann::json::array({
+                                nlohmann::json{{"type", "score"}, {"thres", 0.5}},
+                                nlohmann::json{{"type", "count"}, {"class", "scratch"}, {"min", 1}, {"max", 1}}})}};
+        CHECK(j.Init(p, ctx) == 0);
+        Frame f;
+        f.image.create(32, 32, CV_8UC3);
+        f.image_name = "t";
+        f.detections = {Det("scratch", 0.9f, 0, 0, 5, 5),
+                        Det("scratch", 0.3f, 6, 0, 9, 5)};   // 低分被滤，剩 1 → 窗内 OK
+        CHECK(j.Process(f) == true);
+        CHECK(f.verdict == "OK");
+        CHECK(f.judge["filtered"] == 1);
+        CHECK(f.detections.size() == 1);                     // 过滤回写
+
+        Frame f2;
+        f2.image.create(32, 32, CV_8UC3);
+        f2.image_name = "t2";
+        f2.detections = {Det("scratch", 0.9f, 0, 0, 5, 5),
+                         Det("scratch", 0.9f, 6, 0, 9, 5)};  // 2 > max 1 → NG
+        CHECK(j.Process(f2) == true);
+        CHECK(f2.verdict == "NG");
+        CHECK(f2.judge["violations"][0]["actual"] == 2);
+
+        Frame f3;
+        f3.image.create(32, 32, CV_8UC3);
+        f3.image_name = "t3";                                // 零检出：count min1 → NG（在场合型）
+        CHECK(j.Process(f3) == true);
+        CHECK(f3.verdict == "NG");
     }
 
     printf("test_judge: all checks passed\n");
