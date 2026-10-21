@@ -2,16 +2,21 @@
 # -*- coding: utf-8 -*-
 """RKNN 量化精度分析（toolkit2 accuracy_analysis，真板执行——模拟器跑不了）。
 
+官方正确流程（docs.bit-brick.com / Rockchip 文档）：load_rknn 之后不能调
+accuracy_analysis，必须从 ONNX 走量化构建：
+  config → load_onnx → build(do_quantization=True, dataset) → init_runtime(target, device_id)
+  → accuracy_analysis(inputs, output_dir, target, device_id)
+
 前提（一次性）:
-  1. 板上 /data/local/tmp/{rknn_server, librknnrt.so}（2.3.2 配套版）已推、rknn_server 已启动
-  2. adb 可达：USB（~/bin/adb 共享 Windows server）或网络（IP:5555，adb tcpip 5555）
-  3. 模型须是 int8 量化 .rknn（fp16 模型无量化误差可分析）
+  1. 板上 /data/local/tmp/{rknn_server, librknnrt.so}（2.3.2 配套）已推、rknn_server 已启动
+  2. adb 可达：USB（udev 规则放行后 WSL adb 直见）或网络（IP:5555）
+  3. dataset.txt：校准图路径列表（每行一个），至少一张
 
 用法:
-  python3 rknn_acc.py <model.rknn> <device> [image] [out_dir]
+  python3 rknn_acc.py <model.onnx> <dataset.txt> <device> [meanstd] [out_dir]
+    meanstd 默认 "0,0,0/255,255,255"；out_dir 默认 /tmp/rknn_acc_out
 
-输出 JSON: {"ok":true,"out_dir":..,"layers":[{"name":..,"cosine":..}...],"raw":..}
-accuracy_analysis 逐层对比 模拟器 vs 真板 的每层输出（余弦相似度），定位量化敏感层。
+输出 JSON: {"ok":true,"out_dir":..,"layers":[{name,cosine}...],"n_layers":N}
 """
 import json
 import os
@@ -19,14 +24,12 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rknn_sim import parse_meanstd  # noqa: E402
 from onnx_infer import norm_path  # noqa: E402
-
-HOME_BIN = os.environ.get("RVS_BOARD_BIN") or os.path.expanduser("~/bin")
 
 
 def adb_path_prepend():
-    """PATH 前插 adb：优先 toolkit2 自带 Linux adb（同包自带，网络/USB 通吃），
-    回退 ~/bin wrapper。顺序很重要——网络路线必须用 Linux 原生 adb。"""
+    """PATH 前插 toolkit2 自带 Linux adb（与 rknn 包同源，网络/USB 通吃）。"""
     try:
         import rknn  # noqa: F401
         private = os.path.join(os.path.dirname(os.path.dirname(rknn.__file__)),
@@ -36,7 +39,8 @@ def adb_path_prepend():
             return
     except Exception:
         pass
-    os.environ["PATH"] = HOME_BIN + os.pathsep + os.environ.get("PATH", "")
+    home_bin = os.environ.get("RVS_BOARD_BIN") or os.path.expanduser("~/bin")
+    os.environ["PATH"] = home_bin + os.pathsep + os.environ.get("PATH", "")
 
 
 def parse_error_analysis(path):
@@ -45,32 +49,43 @@ def parse_error_analysis(path):
     if not os.path.exists(path):
         return layers
     for line in open(path, encoding="utf-8", errors="replace"):
-        m = re.match(r"^(\S+)\s+([0-9.]+)\s+([0-9.]+)\s*$", line.strip())
-        if not m:
-            m2 = re.search(r"(cosine|余弦)[^\d]*([0-9.]+)", line, re.IGNORECASE)
-            if m2 and len(line) > 10:
-                layers.append({"name": line.split()[0][:60], "cosine": float(m2.group(2))})
+        line = line.strip()
+        if not line or line.startswith("#"):
             continue
-        layers.append({"name": m.group(1), "cosine": float(m.group(3))})
+        nums = re.findall(r"0\.\d+|1\.0+|1$", line)
+        if len(nums) >= 1 and len(line.split()) >= 2:
+            layers.append({"name": line.split()[0][:60], "cosine": float(nums[-1])})
     return layers
 
 
 def main():
-    if len(sys.argv) < 3:
-        print(json.dumps({"ok": False, "error": "usage: rknn_acc.py <model.rknn> <device> [image] [out_dir]"}))
+    if len(sys.argv) < 4:
+        print(json.dumps({"ok": False,
+                          "error": "usage: rknn_acc.py <model.onnx> <dataset.txt> <device> [meanstd] [out_dir]"}))
         return
-    model = norm_path(sys.argv[1])
-    device = sys.argv[2]
-    image = norm_path(sys.argv[3]) if len(sys.argv) > 3 else None
-    out_dir = norm_path(sys.argv[4]) if len(sys.argv) > 4 else "/tmp/rknn_acc_out"
+    onnx_path = norm_path(sys.argv[1])
+    dataset = norm_path(sys.argv[2])
+    device = sys.argv[3]
+    meanstd = sys.argv[4] if len(sys.argv) > 4 else "0,0,0/255,255,255"
+    out_dir = norm_path(sys.argv[5]) if len(sys.argv) > 5 else "/tmp/rknn_acc_out"
 
     adb_path_prepend()
+    mean, std = parse_meanstd(meanstd)
 
     from rknn.api import RKNN
     rknn = RKNN(verbose=False)
-    if rknn.load_rknn(model) != 0:
-        print(json.dumps({"ok": False, "error": f"load_rknn failed: {model}"}))
+
+    if rknn.config(mean_values=mean, std_values=std,
+                   target_platform="rk3576") != 0:
+        print(json.dumps({"ok": False, "error": "config failed"}))
         return
+    if rknn.load_onnx(model=onnx_path) != 0:
+        print(json.dumps({"ok": False, "error": f"load_onnx failed: {onnx_path}"}))
+        return
+    if rknn.build(do_quantization=True, dataset=dataset) != 0:
+        print(json.dumps({"ok": False, "error": "build(do_quantization) failed——查 dataset.txt 图片路径"}))
+        return
+
     try:
         if rknn.init_runtime(target="rk3576", device_id=device) != 0:
             print(json.dumps({"ok": False,
@@ -81,11 +96,10 @@ def main():
         return
 
     os.makedirs(out_dir, exist_ok=True)
-    inputs = [image] if image else [os.path.join(os.path.dirname(model), "..",
-                                                 "assets/test_images/test.jpg")]
-    inputs = [p for p in inputs if os.path.exists(p)]
+    inputs = [l.strip() for l in open(dataset, encoding="utf-8") if l.strip()]
+    inputs = [norm_path(p) for p in inputs if os.path.exists(norm_path(p))]
     if not inputs:
-        print(json.dumps({"ok": False, "error": "no input image found"}))
+        print(json.dumps({"ok": False, "error": "dataset 图片全部不存在"}))
         return
 
     try:
