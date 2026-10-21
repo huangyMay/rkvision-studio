@@ -21,7 +21,7 @@ python3 tools/rknn_acc.py best.onnx dataset.txt 192.168.0.x:5555 0,0,0/255,255,2
 #       /tmp/rknn_acc_out/runtime/dumps/*.npy（逐层张量，本项目 786 个）
 ```
 
-**真跑结果**（helmet yolov5s，单图校准）：94 层解析成功；`sim_single_cos≈1.0` 全程（模拟器逐层忠实）、`rt_single_cos=1.0`（板端逐层与模拟器一致）、`sim_entire_cos` 从 0.9998 渐降——量化噪声逐层累积的标准形态。单图校准下部分层余弦偏低属预期，正式量化需 50~200 张多光照校准图。
+**真跑结果**（helmet yolov5s，单图校准，静态 ARP 确定性链路）：94 层全部解析，**`sim_entire_cos ≥ 0.99` 的层 = 94/94（零低余弦层）**；`sim_single_cos≈1.0` 全程（模拟器逐层忠实）、`rt_single_cos=1.0`（板端逐层与模拟器一致）、`sim_entire_cos` 从 0.9998 缓降——量化噪声逐层累积的正常形态。单图校准能跑通全流程；正式量产级量化建议仍扩充 50~200 张多光照校准图。
 
 ## 1. API 误区：load_rknn 之后不能调 accuracy_analysis
 
@@ -81,9 +81,9 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 | 尝试 | 结果 |
 |---|---|
-| `adb root` + `adb tcpip 5555`（多次，含全新开机） | 口头应答 "restarting in TCP mode"，但 **5555 从未监听**（`/proc/net/tcp6` 判定） |
-| `setprop service.adb.tcp.port 5555` + `persist.adb.tcp.port 5555` + `stop/start adbd` | 同上 |
-| 开发者选项"无线调试" | 有此选项且能显示 IP:端口（每次会变），但外部连接同样被拒 |
+| `adb root` + `adb tcpip 5555`（多次，含全新开机） | 口头应答 "restarting in TCP mode"；早期观察到"5555 未监听"——**后被证伪**：persist 自听生效，`/proc/net/tcp6` 一直有 `:15B3`，"连不上"全是下面的 ARP 抢答 |
+| `setprop service.adb.tcp.port 5555` + `persist.adb.tcp.port 5555` + `stop/start adbd` | 属性均生效；persist 变体经重启实测**开机自听成功** |
+| 开发者选项"无线调试" | 有此选项且能显示 IP:端口（每次会变），但外部连接同样被 ARP 冲突遮蔽 |
 
 **根因（实测钉死）**：不是 ROM 裁剪了 TCP——**是局域网里另一台设备抢答了板子的 IP（ARP 冲突）**。证据链：
 
@@ -145,6 +145,7 @@ python3 -u tools/rknn_acc.py ...   # -u 关闭缓冲，进度实时可见
 | WSL adb 显示 `no permissions` | 缺 udev 规则（vendor 2207） | 51-rk.rules 一行 + reload |
 | `usbipd attach` 报 busy/exported | 僵尸 attach | `wsl --shutdown` 后重来 |
 | `pip install rknn-toolkit2` 找不到版本 | PyPI 无此包/无 win wheel | 用官方仓库/本地 Linux wheel |
+| 逐层余弦大量为 0 或异常偏低 | 解析器把欧氏距离（euc）当成余弦（cos） | 按 `|` 分列后取偶数位（cos 列），勿取行内最后一个数字 |
 
 ## 6. 板子重启后的手工恢复清单（accuracy_analysis 按序执行）
 
