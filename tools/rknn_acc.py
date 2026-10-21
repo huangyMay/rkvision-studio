@@ -44,17 +44,33 @@ def adb_path_prepend():
 
 
 def parse_error_analysis(path):
-    """error_analysis.txt → [{name, cosine}]（兼容 2.3.x 的表格排版）。"""
+    """error_analysis.txt → [{name, sim_entire_cos, sim_single_cos, rt_entire_cos, rt_single_cos}]。
+    真实列序（2.3.2）：sim_entire(cos|euc) sim_single(cos|euc) runtime_entire(cos|euc) single_sim(cos|euc)。
+    runtime 侧仅对部分层输出；无数据的行（如 [Conv] getitem）跳过。"""
     layers = []
     if not os.path.exists(path):
         return layers
+    num = re.compile(r"-?\d+\.\d+")
     for line in open(path, encoding="utf-8", errors="replace"):
-        line = line.strip()
-        if not line or line.startswith("#"):
+        line = line.rstrip()
+        if not line or line.startswith("#") or set(line) <= {"-", " "}:
             continue
-        nums = re.findall(r"0\.\d+|1\.0+|1$", line)
-        if len(nums) >= 1 and len(line.split()) >= 2:
-            layers.append({"name": line.split()[0][:60], "cosine": float(nums[-1])})
+        if "layer_name" in line or "cos " in line[:40] and "euc" in line[:40]:
+            continue
+        floats = num.findall(line)
+        if not floats:
+            continue
+        name = line.split(floats[0])[0].strip()
+        if not name:
+            continue
+        d = {"name": name,
+             "sim_entire_cos": float(floats[0])}
+        if len(floats) >= 3:
+            d["sim_single_cos"] = float(floats[2])
+        if len(floats) >= 7:
+            d["rt_entire_cos"] = float(floats[4])
+            d["rt_single_cos"] = float(floats[6])
+        layers.append(d)
     return layers
 
 
