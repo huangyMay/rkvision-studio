@@ -1,13 +1,36 @@
+#include "model/workflowgen.h"
 #include "ui/mainwindow.h"
 
 #include <QApplication>
 #include <QFile>
+#include <QJsonDocument>
 #include <QStyleFactory>
 #include <QTimer>
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+
+    // 工作流 JSON 生成回归（无 GUI）：--workflowgen <out.json>
+    const QStringList args = app.arguments();
+    const int wfIdx = args.indexOf(QStringLiteral("--workflowgen"));
+    if (wfIdx >= 0 && args.size() > wfIdx + 1) {
+        WorkflowForm f;                    // 默认表单（与 tests/workflowgen_golden.json 同源）
+        f.projectName = QStringLiteral("workflow_demo");
+        f.modelFile = QStringLiteral("models/helmet_detect_my.rknn");
+        f.rules = {{QStringLiteral("score"), QStringLiteral("*"), QStringLiteral("0.45"), QString()},
+                   {QStringLiteral("count"), QStringLiteral("*"), QStringLiteral("1"), QStringLiteral("99")}};
+        const QJsonObject obj = WorkflowGen::buildJson(f);
+        QFile out(args.at(wfIdx + 1));
+        if (out.open(QIODevice::WriteOnly)) {
+            out.write(QJsonDocument(obj).toJson());
+            out.close();
+            fprintf(stdout, "workflowgen ok: %s\n", args.at(wfIdx + 1).toUtf8().constData());
+            return 0;
+        }
+        fprintf(stderr, "workflowgen: cannot write %s\n", args.at(wfIdx + 1).toUtf8().constData());
+        return 1;
+    }
 
     // 科技感主题
     QFile qss(QStringLiteral(":/res/theme.qss"));
@@ -18,7 +41,6 @@ int main(int argc, char *argv[]) {
     w.show();
 
     // 回归触发器（独立于截图模式；与 --screenshot 组合时可自动存盘退出）
-    const QStringList args = app.arguments();
     const int rtIdx = args.indexOf(QStringLiteral("--autortsp"));
     if (rtIdx >= 0 && args.size() > rtIdx + 1) {
         const QString url = args.at(rtIdx + 1);

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "name": "workflow_demo",
+  "target": { "platform": "rk3576", "runtime": "android-native", "core_mask": "auto" },
+  "models": {
+    "det": {
+      "family": "yolov5-det",
+      "file": "models/helmet_detect_my.rknn",
+      "input": { "name": "", "shape": [1, 3, 640, 640], "layout": "NHWC", "dtype": "uint8" }
+    }
+  },
+  "pipeline": [
+    { "id": "src", "plugin": "image_dir", "params": { "path": "assets/test_images", "loop": false } },
+    { "id": "pre", "plugin": "letterbox", "params": { "size": 640, "pad_value": 255 } },
+    { "id": "inf", "plugin": "infer", "model": "det" },
+    { "id": "post", "plugin": "yolov5_det",
+      "params": { "conf_thres": 0.25, "iou_thres": 0.45, "classes": ["head", "helmet"] } },
+    { "id": "jdg", "plugin": "judge",
+      "params": {
+        "rules": [
+          { "type": "score", "class": "*", "thres": 0.45 },
+          { "type": "count", "class": "*", "min": 1, "max": 99 }
+        ],
+        "verdict": "ANY_NG",
+        "actions": ["log:workflow_demo", "snapshot:ng_images"]
+      } },
+    { "id": "arc", "plugin": "archive", "params": { "ng_dir": "ng_images", "keep_days": 7 } },
+    { "id": "out", "plugin": "image_out", "params": { "path": "output", "draw": true, "save_json": true } }
+  ]
+}

@@ -22,6 +22,7 @@ add_executable(rvs_studio
     src/core/boardmonitor.cpp
     src/core/inferstream.cpp
     src/model/pipelinespec.cpp
+    src/model/workflowgen.cpp
     # ui 界面层
     src/ui/mainwindow.cpp
     src/ui/widgets/previewwidget.cpp
