@@ -73,8 +73,9 @@ int JudgeStage::Init(const nlohmann::json& params, const StageContext& ctx) {
 void JudgeStage::RunActions(const Frame& frame, bool ng) {
     for (const std::string& a : actions_) {
         if (a.rfind("log:", 0) == 0) {
-            fprintf(stderr, "judge[%s] %s: %s\n", ng ? "NG" : "OK",
-                    frame.image_name.c_str(), a.c_str() + strlen("log:"));
+            fprintf(stderr, "judge[%s] %s: %s | %s\n", ng ? "NG" : "OK",
+                    frame.image_name.c_str(), a.c_str() + strlen("log:"),
+                    JudgeSummary(frame.judge).c_str());
         } else if (a.rfind("snapshot:", 0) == 0) {
             const std::string dir = a.substr(strlen("snapshot:"));
             MkdirP(dir);
@@ -96,6 +97,17 @@ bool JudgeStage::Process(Frame& frame) {
     frame.judge["filtered"] = before - frame.detections.size();
     if (v.ng) RunActions(frame, true);
     return true;
+}
+
+std::string JudgeSummary(const nlohmann::json& detail) {
+    std::string out;
+    if (!detail.is_object() || !detail.contains("violations")) return out;
+    for (const auto& v : detail["violations"]) {
+        if (!out.empty()) out += "; ";
+        out += v.value("type", "?") + "(" + v.value("cls", "*") + ")=" +
+               std::to_string(v.value("actual", 0));
+    }
+    return out;
 }
 
 std::vector<JudgeRule> JudgeCore::ParseRules(const nlohmann::json& rules) {

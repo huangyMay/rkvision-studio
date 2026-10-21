@@ -245,6 +245,18 @@ int main() {
         CHECK(f3.verdict == "NG");
     }
 
+    // ⑩ JudgeSummary：违规明细 → 一行人话（判决解释直出）
+    {
+        nlohmann::json d = {{"violations", nlohmann::json::array({
+            nlohmann::json{{"rule", 0}, {"type", "count"}, {"cls", "scratch"}, {"actual", 3}},
+            nlohmann::json{{"rule", 1}, {"type", "persist"}, {"cls", "head"}, {"actual", 5}}})}};
+        const std::string s = JudgeSummary(d);
+        CHECK(s.find("count(scratch)=3") != std::string::npos);
+        CHECK(s.find("persist(head)=5") != std::string::npos);
+        CHECK(JudgeSummary({{"violations", nlohmann::json::array()}}).empty());
+        CHECK(JudgeSummary(nlohmann::json{{}}).empty());
+    }
+
     printf("test_judge: all checks passed\n");
     return 0;
 }

@@ -9,6 +9,7 @@
 #include <string>
 
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -120,6 +121,30 @@ int main() {
         nlohmann::json j2 = nlohmann::json::parse(jf2);
         CHECK(!j2.contains("verdict"));
         CHECK(!j2.contains("judge"));
+    }
+
+    // ⑥ verdict 徽标：同一帧带/不带 verdict 的结果图像素不同（徽标画上了）
+    {
+        ImageOutSink sink;
+        nlohmann::json p;
+        p["path"] = "out";
+        CHECK(sink.Init(p, ctx) == 0);
+        Frame withV, withoutV;
+        withV.image.create(64, 64, CV_8UC3);
+        withoutV.image.create(64, 64, CV_8UC3);
+        withV.image = cv::Scalar(40, 40, 40);
+        withoutV.image = cv::Scalar(40, 40, 40);
+        withV.image_name = "img6";  withoutV.image_name = "img7";
+        withV.verdict = "NG";
+        CHECK(sink.Process(withV) == true);
+        CHECK(sink.Process(withoutV) == true);
+        const cv::Mat a = cv::imread("/tmp/rvs_test_sink/out/img6_result.jpg");
+        const cv::Mat b = cv::imread("/tmp/rvs_test_sink/out/img7_result.jpg");
+        CHECK(!a.empty() && !b.empty());
+        cv::Mat diff;
+        cv::absdiff(a, b, diff);
+        cv::cvtColor(diff, diff, cv::COLOR_BGR2GRAY);
+        CHECK(cv::countNonZero(diff) > 0);            // 徽标确实现身
     }
 
     printf("test_sink: all checks passed\n");

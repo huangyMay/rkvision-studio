@@ -38,7 +38,6 @@ struct JudgeVerdict {
 struct JudgeCore {
     // 非法规则抛 std::runtime_error（what 含规则下标与键名）
     static std::vector<JudgeRule> ParseRules(const nlohmann::json& rules);
-
     // 过滤规则依序应用；判决规则跳过
     static std::vector<Detection> ApplyFilters(const std::vector<JudgeRule>& rules,
                                                const std::vector<Detection>& in);
@@ -51,6 +50,9 @@ struct JudgeCore {
 
     static bool PointInPolygon(float px, float py, const std::vector<cv::Point2f>& poly);
 };
+
+// 违规明细 → 一行人话（日志/证据用）："count(scratch)=3; persist(head)=5"；无违规返回空串
+std::string JudgeSummary(const nlohmann::json& detail);
 
 // ---- IStage 壳：pipeline.json 的 judge 节点（过滤回写 detections，写 Frame.verdict/judge）----
 class JudgeStage : public IStage {

@@ -40,8 +40,9 @@ int ImageOutSink::Init(const nlohmann::json& params, const StageContext& ctx) {
 
 bool ImageOutSink::Process(Frame& frame) {
     // 画框永远画在原图坐标系上（letterbox 后的 frame.image 是 640 方图 RGB，不能直接用）
+    const bool has_verdict = !frame.verdict.empty();
     cv::Mat canvas = frame.orig_image.empty() ? frame.image : frame.orig_image;
-    if (draw_ && !frame.detections.empty()) {
+    if (draw_ && (!frame.detections.empty() || has_verdict)) {
         canvas = canvas.clone();
         for (const Detection& d : frame.detections) {
             cv::Point p1((int)d.x1, (int)d.y1), p2((int)d.x2, (int)d.y2);
@@ -50,6 +51,11 @@ bool ImageOutSink::Process(Frame& frame) {
             snprintf(label, sizeof(label), "%s %.2f", d.label.c_str(), d.score);
             cv::putText(canvas, label, cv::Point((int)d.x1, std::max(0, (int)d.y1 - 4)),
                         cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+        }
+        if (has_verdict) {                       // 判决徽标：左上角 OK（绿）/NG（红）
+            cv::putText(canvas, frame.verdict, cv::Point(8, 30), cv::FONT_HERSHEY_SIMPLEX,
+                        1.0, frame.verdict == "NG" ? cv::Scalar(0, 0, 255)
+                                                   : cv::Scalar(0, 255, 0), 2);
         }
     }
 
