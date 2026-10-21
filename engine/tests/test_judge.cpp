@@ -73,11 +73,39 @@ int main() {
         CHECK(out.size() == 1 && out[0].x1 == 20);
     }
 
+    // ③b 负坐标框中心 (-20,0)：多边形整体在负半平面——clamp 实现（中心→(0,0)）必落域外，
+    //     本用例对"不 clamp"才具判别性（终审 Important 3）
+    {
+        auto rules = JudgeCore::ParseRules(json::array({
+            json{{"type", "region"}, {"polygon", {{-30,-10},{-10,-10},{-10,10},{-30,10}}}, {"inside", true}}}));
+        auto out = JudgeCore::ApplyFilters(rules, {Det("a", 0.9f, -25, -5, -15, 5)});
+        CHECK(out.size() == 1);
+    }
+
+    // ③c 过滤器 class 作用域：score(class=head) 只滤 head，其余类不受影响（终审 Important 2）
+    {
+        auto rules = JudgeCore::ParseRules(json::array({
+            json{{"type", "score"}, {"class", "head"}, {"thres", 0.5}}}));
+        auto out = JudgeCore::ApplyFilters(rules, {Det("head", 0.3f, 0, 0, 5, 5),      // head 低分 → 滤
+                                                   Det("scratch", 0.3f, 6, 0, 9, 5)}); // 非head 低分 → 留
+        CHECK(out.size() == 1);
+        CHECK(out[0].label == "scratch");
+    }
+
     // ④ region 退化输入：多边形点数 <3 → ParseRules 抛异常（Review Focus 1）
     {
         bool threw = false;
         try {
             JudgeCore::ParseRules(json::array({json{{"type", "region"}, {"polygon", {{0,0},{1,1}}}}}));
+        } catch (const std::runtime_error&) { threw = true; }
+        CHECK(threw);
+    }
+
+    // ④b 非法 regex：ParseRules 即抛（Init 报错），不得拖到首帧 abort（终审 Important 1）
+    {
+        bool threw = false;
+        try {
+            JudgeCore::ParseRules(json::array({json{{"type", "regex"}, {"pattern", "["}}}));
         } catch (const std::runtime_error&) { threw = true; }
         CHECK(threw);
     }

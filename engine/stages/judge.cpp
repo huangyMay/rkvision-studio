@@ -134,6 +134,13 @@ std::vector<JudgeRule> JudgeCore::ParseRules(const nlohmann::json& rules) {
             j.pattern = r.value("pattern", "");
             if (j.pattern.empty())
                 throw std::runtime_error("judge.rules[" + std::to_string(i) + "].pattern is required");
+            try {                          // Init 期预编译校验，非法 pattern 在此报错而非首帧 abort
+                std::regex re;
+                re.assign(j.pattern);
+            } catch (const std::regex_error&) {
+                throw std::runtime_error("judge.rules[" + std::to_string(i) +
+                                         "].pattern invalid regex: " + j.pattern);
+            }
         } else {
             throw std::runtime_error("judge.rules[" + std::to_string(i) +
                                      "].type unknown: " + j.type);
@@ -157,22 +164,26 @@ bool JudgeCore::PointInPolygon(float px, float py, const std::vector<cv::Point2f
 std::vector<Detection> JudgeCore::ApplyFilters(const std::vector<JudgeRule>& rules,
                                                const std::vector<Detection>& in) {
     std::vector<Detection> cur = in;
+    auto cls_match = [](const JudgeRule& r, const Detection& d) {
+        return r.cls == "*" || d.label == r.cls;
+    };
     for (const JudgeRule& r : rules) {
         if (r.type == "score") {
             std::vector<Detection> next;
             for (const Detection& d : cur)
-                if (d.score >= r.thres) next.push_back(d);
+                if (!cls_match(r, d) || d.score >= r.thres) next.push_back(d);
             cur.swap(next);
         } else if (r.type == "size") {
             std::vector<Detection> next;
             for (const Detection& d : cur) {
                 const float area = (d.x2 - d.x1) * (d.y2 - d.y1);
-                if (area >= r.min_px && area <= r.max_px) next.push_back(d);
+                if (!cls_match(r, d) || (area >= r.min_px && area <= r.max_px)) next.push_back(d);
             }
             cur.swap(next);
         } else if (r.type == "region") {
             std::vector<Detection> next;
             for (const Detection& d : cur) {
+                if (!cls_match(r, d)) { next.push_back(d); continue; }
                 const float cx = (d.x1 + d.x2) / 2.f, cy = (d.y1 + d.y2) / 2.f;
                 const bool pin = PointInPolygon(cx, cy, r.polygon);
                 if (pin == r.inside) next.push_back(d);
