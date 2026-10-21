@@ -45,7 +45,9 @@ int RunProject(const std::string& project_dir, std::string* summary_json) {
 
     RunStats stats = Execute(chain, 0);
     char buf[512];
-    snprintf(buf, sizeof(buf), "{\"frames\":%d,\"e2e_avg_ms\":%.2f}", stats.frames, stats.e2e_avg_ms);
+    snprintf(buf, sizeof(buf),
+             "{\"frames\":%d,\"ok\":%d,\"ng\":%d,\"e2e_avg_ms\":%.2f}",
+             stats.frames, stats.ok_frames, stats.ng_frames, stats.e2e_avg_ms);
     if (summary_json) *summary_json = buf;
     printf("%s\n", buf);
     return 0;

@@ -4,6 +4,7 @@
 #include "core/stage.hpp"
 
 #include <cstdio>
+#include <utility>
 #include <memory>
 #include <vector>
 
@@ -50,6 +51,24 @@ private:
     StageMeta sink_meta_{"fake_sink", false, true, false};
 };
 
+class VerdictStage : public IStage {
+public:
+    explicit VerdictStage(std::vector<const char*> v) : v_(std::move(v)) {}
+    int Init(const nlohmann::json&, const StageContext&) override { return 0; }
+    bool Process(Frame& f) override {
+        f.verdict = v_[i_ < v_.size() ? i_ : v_.size() - 1];
+        ++i_;
+        return true;
+    }
+    const StageMeta& Meta() const override {
+        static StageMeta m{"fake_verdict", false, false, false};
+        return m;
+    }
+private:
+    std::vector<const char*> v_;
+    size_t i_ = 0;
+};
+
 } // namespace
 
 int main() {
@@ -79,6 +98,15 @@ int main() {
     std::vector<std::unique_ptr<IStage>> empty;
     RunStats s3 = Execute(empty, 0);
     CHECK(s3.frames == 0);
+
+    // ④ verdict 聚合：逐帧 OK/NG/空 → ok_frames==1, ng_frames==1（Task 6）
+    std::vector<std::unique_ptr<IStage>> chain4;
+    chain4.emplace_back(new FakeSource(3));
+    chain4.emplace_back(new VerdictStage({"OK", "NG", ""}));   // 未判决帧不计入
+    RunStats s4 = Execute(chain4, 0);
+    CHECK(s4.frames == 3);
+    CHECK(s4.ok_frames == 1);
+    CHECK(s4.ng_frames == 1);
 
     printf("test_executor: all checks passed\n");
     return 0;

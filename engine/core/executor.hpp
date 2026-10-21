@@ -9,6 +9,8 @@
 
 struct RunStats {
     int frames = 0;
+    int ok_frames = 0;                      // verdict=="OK" 的帧（judge 在链上时）
+    int ng_frames = 0;                      // verdict=="NG" 的帧
     std::map<std::string, double> avg_ms;   // 各 stage 的每帧平均耗时
     double e2e_avg_ms = 0.0;
 };

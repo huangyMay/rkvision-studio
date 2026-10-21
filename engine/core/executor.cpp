@@ -35,6 +35,8 @@ RunStats Execute(const std::vector<std::unique_ptr<IStage>>& chain, int max_fram
             stage_total_ms[chain[k]->Id()] += frame_ms[k];
         }
         ++stats.frames;
+        if (frame.verdict == "OK") ++stats.ok_frames;
+        else if (frame.verdict == "NG") ++stats.ng_frames;
     }
 
     stats.e2e_avg_ms = stats.frames > 0 ? e2e_total_ms / stats.frames : 0.0;
