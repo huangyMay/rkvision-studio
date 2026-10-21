@@ -153,6 +153,10 @@ python3 -u tools/rknn_acc.py ...   # -u 关闭缓冲，进度实时可见
 > `persist.adb.tcp.port=5555` 已设置——理论上开机会自动监听，**先做第 1 步验证，不通再做第 2 步**。
 
 ```bash
+# ⓪ 【仅 Windows 重启过后首次使用时】静态 ARP 钉回板子 MAC（管理员终端）
+#    没有它：外部发往板子 IP 的包会被 ARP 抢答设备截走（见 §3.2）
+netsh interface ip add neighbors "以太网 2" <板IP> <板MAC>
+
 # ① 验证 5555 是否开机自听（在 PC 或 WSL 上）
 #    通了 → 直接跳第 3 步；拒绝 → 做第 ② 步（需要 USB 线连着板子）
 adb connect <板IP>:5555
