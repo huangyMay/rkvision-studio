@@ -73,6 +73,10 @@ bool ImageOutSink::Process(Frame& frame) {
             {"detections", detections},
             {"timing", frame.timing},
         };
+        if (!frame.verdict.empty()) {          // judge 在链上时才出现（旧消费者不受影响）
+            j["verdict"] = frame.verdict;
+            if (!frame.judge.is_null()) j["judge"] = frame.judge;
+        }
         std::ofstream f(base + "_result.json");
         if (!f.good()) {
             fprintf(stderr, "image_out: cannot write %s_result.json\n", base.c_str());

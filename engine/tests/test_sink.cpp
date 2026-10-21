@@ -95,6 +95,33 @@ int main() {
         CHECK(saved.cols == 80 && saved.rows == 60);   // 画在原图坐标系上
     }
 
+    // ⑤ verdict 透传：非空写 "verdict"/"judge" 键；空则两键都不出现（Task 1）
+    {
+        ImageOutSink sink;
+        nlohmann::json p;
+        p["path"] = "out";
+        CHECK(sink.Init(p, ctx) == 0);
+        Frame f;
+        f.image.create(32, 32, CV_8UC3);
+        f.image_name = "img4";
+        f.verdict = "NG";
+        f.judge = nlohmann::json{{"violations", nlohmann::json::array({nlohmann::json{{"type", "count"}}})}};
+        CHECK(sink.Process(f) == true);
+        std::ifstream jf("/tmp/rvs_test_sink/out/img4_result.json");
+        nlohmann::json j = nlohmann::json::parse(jf);
+        CHECK(j["verdict"] == "NG");
+        CHECK(j["judge"]["violations"].size() == 1);
+
+        Frame f2;
+        f2.image.create(32, 32, CV_8UC3);
+        f2.image_name = "img5";                       // verdict 空 → 不写键
+        CHECK(sink.Process(f2) == true);
+        std::ifstream jf2("/tmp/rvs_test_sink/out/img5_result.json");
+        nlohmann::json j2 = nlohmann::json::parse(jf2);
+        CHECK(!j2.contains("verdict"));
+        CHECK(!j2.contains("judge"));
+    }
+
     printf("test_sink: all checks passed\n");
     return 0;
 }

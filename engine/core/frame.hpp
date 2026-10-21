@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
 #include <opencv2/core.hpp>
 
 struct Detection {
@@ -29,5 +30,7 @@ struct Frame {
     std::vector<float> out_scales;
 
     std::vector<Detection> detections;
+    std::string verdict;            // judge 产物："OK"/"NG"；空 = 本帧未判决
+    nlohmann::json judge;           // judge 命中明细（violations/filtered），未判决时为 null
     std::map<std::string, double> timing;   // 分段耗时 ms，key = stage id
 };
