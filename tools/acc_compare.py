@@ -207,7 +207,8 @@ def main():
     report["tensor_cosine"]["2_vs_1"] = tensor_cosine(outs1, o2)
     b2 = [[d[0], d[1], d[2], d[3], d[4]] for d in (d2 or [])]
     report["match"]["2_vs_1"] = match_report(base, b2, "FP16模拟 vs ONNX")
-    emit_stage("2_fp16_sim")
+    emit_stage("2_fp16_sim", {"image": stage_image("fp16_result.jpg",
+                                                   draw(img, d2, (128, 0, 255), "fp16"))})
     try:
         rk_fp16.release()
     except Exception:
@@ -253,24 +254,33 @@ def main():
             report["match"]["4_vs_1"] = {"label": "板上int8", "error": str(e)[:200]}
             emit_stage("4_board")
 
-    # 逐层精度（复用 ③ 的 int8 RKNN 对象直接 accuracy_analysis——不重新构建）
+    # 逐层精度（复用 ③ 的 int8 RKNN 对象直接 accuracy_analysis——不重新构建）。
+    # 板可达 → sim+runtime 双列；板失败 → 回退 target=None（仅 simulator 列，仍可定位量化敏感层）
     if dump_dir:
-        try:
-            from rknn_acc import parse_error_analysis
-            acc_dir = os.path.join(dump_dir, "acc")
-            inputs = [image_path]
-            rk_i8.accuracy_analysis(inputs=inputs, output_dir=acc_dir,
-                                    target="rk3576", device_id=device if device else None)
-            layers = parse_error_analysis(os.path.join(acc_dir, "error_analysis.txt"))
-            if layers:
-                report["layers"] = layers
-                lows = [l for l in layers if l.get("sim_single_cos", 1) < 0.99]
-                report["min_single"] = min((l["sim_single_cos"] for l in layers
-                                            if "sim_single_cos" in l), default=1.0)
-                report["n_low"] = len(lows)
-                print("LAYERS " + json.dumps(layers, ensure_ascii=False), flush=True)
-        except Exception as e:  # noqa: BLE001
-            report["layers_error"] = str(e)[:200]
+        layers = []
+        from rknn_acc import parse_error_analysis
+        acc_dir = os.path.join(dump_dir, "acc")
+        inputs = [image_path]
+        attempts = [("rk3576", device if device else None)] if device else []
+        attempts.append((None, None))
+        for target, dev in attempts:
+            try:
+                rk_i8.accuracy_analysis(inputs=inputs, output_dir=acc_dir,
+                                        target=target, device_id=dev)
+                layers = parse_error_analysis(os.path.join(acc_dir, "error_analysis.txt"))
+                if layers:
+                    report["layers"] = layers
+                    lows = [l for l in layers if l.get("sim_single_cos", 1) < 0.99]
+                    report["min_single"] = min((l["sim_single_cos"] for l in layers
+                                                if "sim_single_cos" in l), default=1.0)
+                    report["n_low"] = len(lows)
+                    report["acc_mode"] = "board" if target else "simulator"
+                    print("LAYERS " + json.dumps(layers, ensure_ascii=False), flush=True)
+                    break
+            except Exception as e:  # noqa: BLE001
+                report["layers_error"] = str(e)[:200]
+        if not layers:
+            report["layers_error"] = report.get("layers_error", "accuracy_analysis 无输出")
 
     report["total_ms"] = round((time.time() - t_all) * 1000, 1)
 

@@ -174,10 +174,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                 p = QStringLiteral("//wsl.localhost/Ubuntu-22.04") + p;
             const QImage im(p);
             if (!im.isNull()) {
-                if (o.value("stage").toString() == QStringLiteral("1_onnx"))
-                    m_cmpLocalPreview->setImage(im);
-                else
-                    m_cmpBoardPreview->setImage(im);
+                PreviewWidget *dst = m_imgInt8;
+                const QString st = o.value("stage").toString();
+                if (st == QStringLiteral("1_onnx")) dst = m_imgOnnx;
+                else if (st == QStringLiteral("2_fp16_sim")) dst = m_imgFp16;
+                else if (st == QStringLiteral("4_board")) dst = m_imgBoard;
+                dst->setImage(im);
             }
         }
         updateCompareSummary(o);
@@ -863,22 +865,65 @@ void MainWindow::buildUi() {
     cvLayout->setContentsMargins(4, 4, 4, 4);
     cvLayout->setSpacing(6);
     m_cmpSummary = new QLabel(QStringLiteral(
-        "点「⚖️精度对比」→ 四级逐级流式显示：先出左图，每级数字即时刷新，逐层表最后填充"));
+        "点「⚖️精度对比」→ 四级逐级流式显示：每完成一级，对应图片与数字即时出现"));
     m_cmpSummary->setWordWrap(true);
     cvLayout->addWidget(m_cmpSummary);
 
-    auto *picsRow = new QHBoxLayout;
-    picsRow->setSpacing(8);
-    m_cmpLocalPreview = new PreviewWidget;
-    m_cmpLocalPreview->setPlaceholder(QStringLiteral("左：本地 ONNX 推理结果（点 ⚖️精度对比 后生成）"));
-    m_cmpBoardPreview = new PreviewWidget;
-    m_cmpBoardPreview->setPlaceholder(QStringLiteral("右：板上 int8 推理结果"));
-    picsRow->addWidget(m_cmpLocalPreview, 1);
-    picsRow->addWidget(m_cmpBoardPreview, 1);
-    cvLayout->addLayout(picsRow, 1);
+    // 面板切换：🖼 图片面板（默认 2×2 四图） / 📊 数据面板（四栏精度+逐层表）
+    m_cmpViewStack = new QStackedWidget;
+    cvLayout->addWidget(m_cmpViewStack, 1);
 
+    // 视图 0：图片面板（2×2）
+    auto *imgPanel = new QWidget;
+    auto *imgGrid = new QGridLayout(imgPanel);
+    imgGrid->setContentsMargins(0, 0, 0, 0);
+    imgGrid->setSpacing(6);
+    auto mkCell = [](QGridLayout *g, PreviewWidget **w, const QString &ph,
+                     int r, int c, const QString &tag) {
+        auto *col = new QVBoxLayout;
+        auto *t = new QLabel(tag);
+        t->setObjectName("CardTitle");
+        col->addWidget(t);
+        *w = new PreviewWidget;
+        (*w)->setPlaceholder(ph);
+        col->addWidget(*w, 1);
+        g->addLayout(col, r, c);
+    };
+    mkCell(imgGrid, &m_imgOnnx, QStringLiteral("点 ⚖️ 后生成"), 0, 0,
+           QStringLiteral("① ONNX 基线（本地）"));
+    mkCell(imgGrid, &m_imgBoard, QStringLiteral("板离线/未跑"), 0, 1,
+           QStringLiteral("④ 板上 int8"));
+    mkCell(imgGrid, &m_imgFp16, QStringLiteral("板离线/未跑"), 1, 0,
+           QStringLiteral("② FP16 模拟"));
+    mkCell(imgGrid, &m_imgInt8, QStringLiteral("点 ⚖️ 后生成"), 1, 1,
+           QStringLiteral("③ int8 模拟"));
+    m_cmpViewStack->addWidget(imgPanel);              // m_cmpViewStack index 0
+
+    // 视图 1：数据面板（四栏指标 + 逐层双表）
+    auto *dataPanel = new QWidget;
+    auto *dv = new QVBoxLayout(dataPanel);
+    dv->setContentsMargins(0, 0, 0, 0);
+    dv->setSpacing(6);
+    auto *metricRow = new QHBoxLayout;
+    metricRow->setSpacing(6);
+    auto mkMetric = [&metricRow](QLabel **l, const QString &title) {
+        auto *col = new QVBoxLayout;
+        auto *t = new QLabel(title);
+        t->setObjectName("CardTitle");
+        col->addWidget(t);
+        *l = new QLabel(QStringLiteral("—"));
+        (*l)->setWordWrap(true);
+        (*l)->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        col->addWidget(*l, 1);
+        metricRow->addLayout(col, 1);
+    };
+    mkMetric(&m_metricOnnx, QStringLiteral("① ONNX 基线"));
+    mkMetric(&m_metricFp16, QStringLiteral("② FP16 模拟"));
+    mkMetric(&m_metricInt8, QStringLiteral("③ int8 模拟"));
+    mkMetric(&m_metricBoard, QStringLiteral("④ 板上 int8"));
+    dv->addLayout(metricRow);
     auto *tablesRow = new QHBoxLayout;
-    tablesRow->setSpacing(8);
+    tablesRow->setSpacing(6);
     auto *leftCol = new QVBoxLayout;
     leftCol->addWidget(new QLabel(QStringLiteral("模拟器逐层（simulator_error）")));
     m_cmpSimTable = new QTableWidget(0, 3);
@@ -892,13 +937,28 @@ void MainWindow::buildUi() {
     rightCol->addWidget(m_cmpRtTable, 1);
     tablesRow->addLayout(leftCol, 1);
     tablesRow->addLayout(rightCol, 1);
-    cvLayout->addLayout(tablesRow, 1);
+    dv->addLayout(tablesRow, 1);
+    m_cmpViewStack->addWidget(dataPanel);             // m_cmpViewStack index 1
+
+    // 切换行 + 导出
     auto *cvTail = new QHBoxLayout;
+    auto *picBtn = new QPushButton(QStringLiteral("🖼 图片面板"));
+    picBtn->setCheckable(true);
+    picBtn->setChecked(true);
+    auto *dataBtn = new QPushButton(QStringLiteral("📊 数据面板"));
+    dataBtn->setCheckable(true);
+    auto *viewGroup = new QButtonGroup(this);
+    viewGroup->setExclusive(true);
+    viewGroup->addButton(picBtn);
+    viewGroup->addButton(dataBtn);
+    connect(picBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(0); });
+    connect(dataBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(1); });
     auto *cvHint = new QLabel(QStringLiteral(
-        "用法：点「⚖️精度对比」跑完四级 → 本页自动填充两侧画面与逐层表；低余弦行即精度丢失层"));
+        "低余弦行/低指标即精度丢失层；💾 导出 JSON+CSV+标注图引用"));
     cvHint->setWordWrap(true);
     m_btnExport = new QPushButton(QStringLiteral("💾 导出报告"));
-    m_btnExport->setToolTip(QStringLiteral("导出 JSON 原始数据 + 双表 CSV + 标注图路径清单"));
+    cvTail->addWidget(picBtn);
+    cvTail->addWidget(dataBtn);
     cvTail->addWidget(cvHint, 1);
     cvTail->addWidget(m_btnExport);
     cvLayout->addLayout(cvTail);
@@ -1360,8 +1420,10 @@ void MainWindow::onAccCompare() {
     m_navLab->setChecked(true);
     m_labStack->setCurrentIndex(1);
     m_rkRightStack->setCurrentIndex(1);
-    m_cmpLocalPreview->setPlaceholder(QStringLiteral("① ONNX 推理中…"));
-    m_cmpBoardPreview->setPlaceholder(QStringLiteral("②③④ 完成后显示对应级结果"));
+    m_imgOnnx->setPlaceholder(QStringLiteral("① ONNX 推理中…"));
+    m_imgFp16->setPlaceholder(QStringLiteral("② 构建中…"));
+    m_imgInt8->setPlaceholder(QStringLiteral("③ 量化中…"));
+    m_imgBoard->setPlaceholder(QStringLiteral("④ 板离线/未跑"));
     m_cmpSummary->setText(QStringLiteral("四级对比运行中…（① ONNX → ② FP16 → ③ int8 → ④ 板上）"));
     // dump 目录给 Windows 路径：WSL python 经 /mnt/c 写入（norm_path 自动转），
     // Qt 直接用原路径读——同一物理目录，两侧一致
@@ -1436,6 +1498,24 @@ void MainWindow::updateCompareSummary(const QJsonObject &o) {
                               .arg(nOf("1_onnx"))
                               .arg(o.value("total_ms").toDouble() / 1000, 0, 'f', 1)
                               .arg(body));
+
+    // 数据面板四栏指标
+    auto metric = [](int n, double miou, double drop, double cos, bool err) {
+        if (err) return QStringLiteral("连接失败/未运行\n（查设备地址与 rknn_server）");
+        if (n < 0) return QStringLiteral("—");
+        return QStringLiteral("检出 %1 框\nmean IoU %2\nconf 掉点 %3\n张量余弦 %4")
+            .arg(n).arg(miou, 0, 'f', 4).arg(drop, 0, 'f', 4).arg(cos, 0, 'f', 5);
+    };
+    const bool e4 = stages.value("4_board").toObject().contains(QStringLiteral("error"));
+    const bool e23 = nOf("2_fp16_sim") < 0 || nOf("3_int8_sim") < 0;
+    m_metricOnnx->setText(QStringLiteral("检出 %1 框\nfloat32 基准\n金标准")
+                              .arg(nOf("1_onnx")));
+    m_metricFp16->setText(metric(nOf("2_fp16_sim"), miouOf("2_vs_1"),
+                                 dropOf("2_vs_1"), cosAvg("2_vs_1"), e23));
+    m_metricInt8->setText(metric(nOf("3_int8_sim"), miouOf("3_vs_1"),
+                                 dropOf("3_vs_1"), cosAvg("3_vs_1"), e23));
+    m_metricBoard->setText(metric(nOf("4_board"), miouOf("4_vs_1"),
+                                  dropOf("4_vs_1"), cosAvg("4_vs_1"), e4));
 }
 
 // 对比视图双表：layers 来自 rknn_acc（sim_*  填左表，rt_* 填右表），低余弦标红

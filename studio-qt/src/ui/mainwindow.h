@@ -112,8 +112,17 @@ private:
     QPushButton *m_navLab = nullptr;           // 模型实验室页签（合并 ONNX LAB + RKNN LAB）
     QPushButton *m_segInfer = nullptr;         // 实验室内部段：ONNX 基线
     QPushButton *m_segSim = nullptr;           // 实验室内部段：模拟量化
-    PreviewWidget *m_cmpLocalPreview = nullptr;   // 对比视图：本地 ONNX 结果图
-    PreviewWidget *m_cmpBoardPreview = nullptr;   // 对比视图：板上结果图
+    PreviewWidget *m_cmpLocalPreview = nullptr;   // 对比视图：本地 ONNX 结果图（遗留）
+    PreviewWidget *m_cmpBoardPreview = nullptr;   // 对比视图：板上结果图（遗留）
+    PreviewWidget *m_imgOnnx = nullptr;           // 图片面板：① ONNX
+    PreviewWidget *m_imgFp16 = nullptr;           // 图片面板：② FP16 模拟
+    PreviewWidget *m_imgInt8 = nullptr;           // 图片面板：③ int8 模拟
+    PreviewWidget *m_imgBoard = nullptr;          // 图片面板：④ 板上 int8
+    QStackedWidget *m_cmpViewStack = nullptr;     // 对比面板：0=图片面板 1=数据面板
+    QLabel *m_metricOnnx = nullptr;               // 数据面板四栏指标
+    QLabel *m_metricFp16 = nullptr;
+    QLabel *m_metricInt8 = nullptr;
+    QLabel *m_metricBoard = nullptr;
     QTableWidget *m_cmpSimTable = nullptr;     // 对比视图：模拟器逐层
     QTableWidget *m_cmpRtTable = nullptr;      // 对比视图：板端逐层
     QLabel *m_cmpRightTitle = nullptr;
