@@ -121,6 +121,7 @@ def main():
     iou_th = float(sys.argv[5]) if len(sys.argv) > 5 else 0.45
     meanstd = sys.argv[6] if len(sys.argv) > 6 else "0,0,0|255,255,255"
     dataset = norm_path(sys.argv[7]) if len(sys.argv) > 7 else None
+    dump_dir = norm_path(sys.argv[8]) if len(sys.argv) > 8 else None   # 对比视图：落盘标注图+detections
 
     mean, std = parse_meanstd(meanstd)          # 已是 config 格式 [[...]]；"none" → None
     t_all = time.time()
@@ -198,6 +199,7 @@ def main():
     report["match"]["3_vs_1"] = match_report(base, b3, "int8模拟 vs ONNX")
 
     # ④ 板上 int8（同一 int8 模型，切真板 runtime）
+    d4 = None
     if device:
         t0 = time.time()
         try:
@@ -218,6 +220,38 @@ def main():
             report["match"]["4_vs_1"] = {"label": "板上int8", "error": str(e)[:200]}
 
     report["total_ms"] = round((time.time() - t_all) * 1000, 1)
+
+    # 对比视图数据：落盘 ①/④ 标注图 + 各级 detections（供 Qt 对比页直接加载）
+    if dump_dir:
+        os.makedirs(dump_dir, exist_ok=True)
+
+        def draw(img_src, dets, color, tag):
+            c = img_src.copy()
+            for d in (dets or []):
+                p1, p2 = (int(d[0]), int(d[1])), (int(d[2]), int(d[3]))
+                cv2.rectangle(c, p1, p2, color, 2)
+                cv2.putText(c, f"{tag} {d[4]:.2f}", (p1[0], max(14, p1[1] - 4)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            return c
+
+        cv2.imwrite(os.path.join(dump_dir, "onnx_result.jpg"),
+                    draw(img, d1, (0, 255, 0), "onnx"))
+        if d3:
+            cv2.imwrite(os.path.join(dump_dir, "int8sim_result.jpg"),
+                        draw(img, d3, (255, 128, 0), "i8sim"))
+        if device and d4:
+            cv2.imwrite(os.path.join(dump_dir, "board_result.jpg"),
+                        draw(img, d4, (0, 128, 255), "board"))
+        json.dump({"1_onnx": [list(map(float, d)) for d in (d1 or [])],
+                   "3_int8_sim": [list(map(float, d)) for d in (d3 or [])],
+                   "4_board": [list(map(float, d)) for d in (d4 or [])]},
+                  open(os.path.join(dump_dir, "detections.json"), "w"))
+        report["dump_dir"] = dump_dir
+        report["dump"] = {"onnx": os.path.join(dump_dir, "onnx_result.jpg"),
+                          "int8sim": os.path.join(dump_dir, "int8sim_result.jpg"),
+                          "board": os.path.join(dump_dir, "board_result.jpg")
+                          if device and d4 else ""}
+
     print(json.dumps(report, ensure_ascii=False))
 
 

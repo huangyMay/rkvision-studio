@@ -13,6 +13,7 @@ class PreviewWidget : public QWidget {
 public:
     explicit PreviewWidget(QWidget *parent = nullptr);
     void setFrame(const QImage &img);
+    void setImage(const QImage &img) { setFrame(img); }   // 别名：静态结果图展示
     void setPlaceholder(const QString &text);
     void setStatus(const QString &text);       // 右下角状态字（如 fps / 分辨率）
     // 检测框叠加：rect 为归一化坐标（0~1，相对当前帧），label 可空

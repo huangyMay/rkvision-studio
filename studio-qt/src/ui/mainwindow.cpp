@@ -18,6 +18,7 @@
 #include <QButtonGroup>
 #include <QBuffer>
 #include <QCheckBox>
+#include <QColor>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -235,6 +236,54 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         te->setFont(mono);
         v->addWidget(te, 1);
         dlg.exec();
+
+        // ---- 填充「📊 对比视图」子页：画面 + 逐层表（sim|runtime 双列） ----
+        const QJsonArray layers = o.value("layers").toArray();
+        const QString dump = o.value("dump_dir").toString();
+        if (!dump.isEmpty()) {
+            const QImage localImg(dump + QStringLiteral("/onnx_result.jpg"));
+            if (!localImg.isNull()) m_cmpLocalPreview->setImage(localImg);
+            const QString boardImg = dump + QStringLiteral("/board_result.jpg");
+            if (QFileInfo::exists(boardImg)) {
+                const QImage bi(boardImg);
+                if (!bi.isNull()) m_cmpBoardPreview->setImage(bi);
+            } else {
+                const QImage simImg(dump + QStringLiteral("/int8sim_result.jpg"));
+                if (!simImg.isNull()) m_cmpBoardPreview->setImage(simImg);
+                m_cmpRightTitle->setText(
+                    QStringLiteral("int8 模拟逐层（板离线，无真板数据）"));
+            }
+        }
+        auto fillTable = [&](QTableWidget *t, bool runtimeSide) {
+            t->setRowCount(0);
+            int row = 0;
+            for (const QJsonValue &v : layers) {
+                const QJsonObject o2 = v.toObject();
+                const double ent = runtimeSide ? o2.value("rt_entire_cos").toDouble(-1)
+                                               : o2.value("sim_entire_cos").toDouble(-1);
+                const double sgl = runtimeSide ? o2.value("rt_single_cos").toDouble(-1)
+                                               : o2.value("sim_single_cos").toDouble(-1);
+                if (ent < 0 && sgl < 0) continue;         // 该层无对应侧数据
+                t->insertRow(row);
+                const QString name = o2.value("name").toString();
+                auto mk = [](double val) {
+                    auto *it = new QTableWidgetItem(val > 0 ? QString::number(val, 'f', 5)
+                                                            : QStringLiteral("—"));
+                    if (val > 0 && val < 0.99)
+                        it->setForeground(QColor(0xff, 0x6b, 0x6b));   // 低于验收线标红
+                    return it;
+                };
+                t->setItem(row, 0, new QTableWidgetItem(name));
+                t->setItem(row, 1, mk(ent));
+                t->setItem(row, 2, mk(sgl));
+                ++row;
+            }
+            t->resizeColumnsToContents();
+        };
+        fillTable(m_cmpSimTable, false);
+        fillTable(m_cmpRtTable, true);
+        m_labStack->setCurrentIndex(2);           // 跑完自动切到对比视图
+        m_segCompare->setChecked(true);
     });
     m_acc = new BoardAccRunner(this);
     connect(m_acc, &BoardAccRunner::logLine, this, &MainWindow::appendLog);
@@ -673,8 +722,13 @@ void MainWindow::buildUi() {
     segGroup->setExclusive(true);
     segGroup->addButton(m_segInfer);
     segGroup->addButton(m_segSim);
+    m_segCompare = new QPushButton(QStringLiteral("📊 对比视图 / 逐层精度"));
+    m_segCompare->setObjectName("NavTab");
+    m_segCompare->setCheckable(true);
+    segGroup->addButton(m_segCompare);
     segRow->addWidget(m_segInfer);
     segRow->addWidget(m_segSim);
+    segRow->addWidget(m_segCompare);
     segRow->addStretch();
     labOuter->addLayout(segRow);
     m_labStack = new QStackedWidget;
@@ -774,6 +828,7 @@ void MainWindow::buildUi() {
     connect(m_navWorkflow, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(2); });
     connect(m_segInfer, &QPushButton::clicked, this, [this] { m_labStack->setCurrentIndex(0); });
     connect(m_segSim, &QPushButton::clicked, this, [this] { m_labStack->setCurrentIndex(1); });
+    connect(m_segCompare, &QPushButton::clicked, this, [this] { m_labStack->setCurrentIndex(2); });
 
     // ---- 页 2：RKNN LAB 模拟推理（toolkit2 模拟器：ONNX+转换配置 → build → 模拟） ----
     auto *pageRknn = new QWidget;
@@ -890,6 +945,44 @@ void MainWindow::buildUi() {
     m_rkStats->setObjectName("StatsText");
     rkStatsL->addWidget(m_rkStats);
     rright->addWidget(rkStatsBar);
+
+    // ---- 实验室子页 2：📊 对比视图（上双画面：本地|板上；下双列：sim|runtime 逐层） ----
+    auto *pageCompareView = new QWidget;
+    m_labStack->addWidget(pageCompareView);          // labStack index 2
+    auto *cvLayout = new QVBoxLayout(pageCompareView);
+    cvLayout->setContentsMargins(14, 10, 14, 10);
+    cvLayout->setSpacing(8);
+
+    auto *picsRow = new QHBoxLayout;
+    picsRow->setSpacing(8);
+    m_cmpLocalPreview = new PreviewWidget;
+    m_cmpLocalPreview->setPlaceholder(QStringLiteral("左：本地 ONNX 推理结果（点 ⚖️精度对比 后生成）"));
+    m_cmpBoardPreview = new PreviewWidget;
+    m_cmpBoardPreview->setPlaceholder(QStringLiteral("右：板上 int8 推理结果"));
+    picsRow->addWidget(m_cmpLocalPreview, 1);
+    picsRow->addWidget(m_cmpBoardPreview, 1);
+    cvLayout->addLayout(picsRow, 1);
+
+    auto *tablesRow = new QHBoxLayout;
+    tablesRow->setSpacing(8);
+    auto *leftCol = new QVBoxLayout;
+    leftCol->addWidget(new QLabel(QStringLiteral("模拟器逐层（simulator_error）")));
+    m_cmpSimTable = new QTableWidget(0, 3);
+    m_cmpSimTable->setHorizontalHeaderLabels({QStringLiteral("层"), QStringLiteral("entire"), QStringLiteral("single")});
+    leftCol->addWidget(m_cmpSimTable, 1);
+    auto *rightCol = new QVBoxLayout;
+    m_cmpRightTitle = new QLabel(QStringLiteral("板端逐层（runtime_error；板离线时=int8 模拟）"));
+    rightCol->addWidget(m_cmpRightTitle);
+    m_cmpRtTable = new QTableWidget(0, 3);
+    m_cmpRtTable->setHorizontalHeaderLabels({QStringLiteral("层"), QStringLiteral("entire"), QStringLiteral("single")});
+    rightCol->addWidget(m_cmpRtTable, 1);
+    tablesRow->addLayout(leftCol, 1);
+    tablesRow->addLayout(rightCol, 1);
+    cvLayout->addLayout(tablesRow, 1);
+    auto *cvHint = new QLabel(QStringLiteral(
+        "用法：点「⚖️精度对比」跑完四级 → 本页自动填充两侧画面与逐层表；低余弦行即精度丢失层"));
+    cvHint->setWordWrap(true);
+    cvLayout->addWidget(cvHint);
 
     // ---- 信号 ----
     connect(btnRefresh, &QPushButton::clicked, this, &MainWindow::refreshStatus);

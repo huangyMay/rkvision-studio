@@ -24,6 +24,7 @@ class QLineEdit;
 class QMediaPlayer;
 class QPushButton;
 class QStackedWidget;
+class QTableWidget;
 class QTextEdit;
 class QVideoSink;
 
@@ -107,6 +108,12 @@ private:
     QPushButton *m_navLab = nullptr;           // 模型实验室页签（合并 ONNX LAB + RKNN LAB）
     QPushButton *m_segInfer = nullptr;         // 实验室内部段：ONNX 基线
     QPushButton *m_segSim = nullptr;           // 实验室内部段：模拟量化
+    QPushButton *m_segCompare = nullptr;       // 实验室内部段：对比视图
+    PreviewWidget *m_cmpLocalPreview = nullptr;   // 对比视图：本地 ONNX 结果图
+    PreviewWidget *m_cmpBoardPreview = nullptr;   // 对比视图：板上结果图
+    QTableWidget *m_cmpSimTable = nullptr;     // 对比视图：模拟器逐层
+    QTableWidget *m_cmpRtTable = nullptr;      // 对比视图：板端逐层
+    QLabel *m_cmpRightTitle = nullptr;
     QPushButton *m_navWorkflow = nullptr;
     WorkflowPage *m_workflow = nullptr;        // 工作流配置器页
     PreviewWidget *m_inferPreview = nullptr;   // 推理结果大屏
