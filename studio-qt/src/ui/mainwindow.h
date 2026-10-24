@@ -114,6 +114,7 @@ private:
     QTableWidget *m_cmpSimTable = nullptr;     // 对比视图：模拟器逐层
     QTableWidget *m_cmpRtTable = nullptr;      // 对比视图：板端逐层
     QLabel *m_cmpRightTitle = nullptr;
+    QLabel *m_cmpSummary = nullptr;            // 对比视图：四级漏斗摘要
     QPushButton *m_navWorkflow = nullptr;
     WorkflowPage *m_workflow = nullptr;        // 工作流配置器页
     PreviewWidget *m_inferPreview = nullptr;   // 推理结果大屏

@@ -12,7 +12,7 @@ AccCompareRunner::AccCompareRunner(QObject *parent) : QObject(parent) {}
 void AccCompareRunner::start(const QString &distro, const QString &scriptWsl,
                              const QString &onnxWsl, const QString &imageWsl,
                              const QString &device, const QString &meanstd,
-                             const QString &datasetWsl) {
+                             const QString &datasetWsl, const QString &dumpDir) {
     stop();
     m_out.clear();
     m_proc = new QProcess(this);
@@ -21,7 +21,8 @@ void AccCompareRunner::start(const QString &distro, const QString &scriptWsl,
                      QStringLiteral("python3"), QStringLiteral("-u"), scriptWsl,
                      onnxWsl, imageWsl};
     if (!device.isEmpty()) args << device;
-    args << QStringLiteral("0.25") << QStringLiteral("0.45") << meanstd << datasetWsl;
+    args << QStringLiteral("0.25") << QStringLiteral("0.45") << meanstd << datasetWsl
+         << dumpDir;
     m_proc->setArguments(args);
     connect(m_proc, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
         emit logLine(QStringLiteral("精度对比: 进程错误（WSL python3/toolkit2 可用？）"), "#ff6b6b");

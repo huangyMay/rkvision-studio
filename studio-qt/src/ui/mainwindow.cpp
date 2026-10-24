@@ -213,31 +213,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         } else {
             body += QStringLiteral("④ 板上 int8  —— 板离线，跳过\n");
         }
-        body += QStringLiteral("\n判读: ②掉点=转换损失(应≈0) · ③掉点=量化损失 · ④-③=板端实现差异\n"
-                               "量化损失偏大 → 混合量化（敏感层 fp16）；框缺失(missed>0) → 该级严重失真");
+        appendLog(QStringLiteral("四级对比完成——结果见「📊 对比视图」子页"), "#3ecf72");
 
-        QDialog dlg(this);
-        dlg.setWindowTitle(QStringLiteral("四级精度对比 — %1 @ %2")
-                               .arg(o.value("model").toString(),
-                                    o.value("image").toString()));
-        dlg.resize(860, 460);
-        auto *v = new QVBoxLayout(&dlg);
-        auto *sum = new QLabel(QStringLiteral(
-            "基准：① ONNX float32（检出 %1 框） · 输入 %2 · 总耗时 %3 s")
-            .arg(nOf("1_onnx"))
-            .arg(o.value("input_size").toInt())
-            .arg(o.value("total_ms").toDouble() / 1000, 0, 'f', 1));
-        v->addWidget(sum);
-        auto *te = new QTextEdit;
-        te->setReadOnly(true);
-        te->setPlainText(body);
-        QFont mono(QStringLiteral("Consolas"));
-        mono.setStyleHint(QFont::Monospace);
-        te->setFont(mono);
-        v->addWidget(te, 1);
-        dlg.exec();
+        appendLog(QStringLiteral("四级对比完成——结果见「📊 对比视图」子页"), "#3ecf72");
+        m_cmpSummary->setText(QStringLiteral("<b>%1</b> @ %2 · 基准 ① ONNX float32（检出 %3 框）· 总耗时 %4 s<br>%5")
+                                  .arg(o.value("model").toString().toHtmlEscaped(),
+                                       o.value("image").toString().toHtmlEscaped())
+                                  .arg(nOf("1_onnx"))
+                                  .arg(o.value("total_ms").toDouble() / 1000, 0, 'f', 1)
+                                  .arg(body.toHtmlEscaped().replace(QLatin1Char('\n'),
+                                                                    QStringLiteral("<br>"))));
 
-        // ---- 填充「📊 对比视图」子页：画面 + 逐层表（sim|runtime 双列） ----
+        // ---- 填充「📊 对比视图」子页：画面 + 逐层表（sim|runtime 双列）+ 漏斗摘要 ----
         const QJsonArray layers = o.value("layers").toArray();
         const QString dump = o.value("dump_dir").toString();
         if (!dump.isEmpty()) {
@@ -952,6 +939,10 @@ void MainWindow::buildUi() {
     auto *cvLayout = new QVBoxLayout(pageCompareView);
     cvLayout->setContentsMargins(14, 10, 14, 10);
     cvLayout->setSpacing(8);
+    m_cmpSummary = new QLabel(QStringLiteral(
+        "点「⚖️精度对比」跑完四级后，此处显示漏斗摘要；双画面与逐层表自动填充"));
+    m_cmpSummary->setWordWrap(true);
+    cvLayout->addWidget(m_cmpSummary);
 
     auto *picsRow = new QHBoxLayout;
     picsRow->setSpacing(8);
@@ -1440,7 +1431,8 @@ void MainWindow::onAccCompare() {
                      OnnxRunner::toWslPath(onnx),
                      OnnxRunner::toWslPath(image),
                      device, meanstd,
-                     OnnxRunner::toWslPath(dsLocal));
+                     OnnxRunner::toWslPath(dsLocal),
+                     OnnxRunner::toWslPath(QDir::temp().filePath(QStringLiteral("acc_dump"))));
 }
 
 void MainWindow::onBoardAcc() {

@@ -12,11 +12,11 @@ public:
     explicit AccCompareRunner(QObject *parent = nullptr);
     bool running() const { return m_proc != nullptr; }
 
-    // 所有路径须为 WSL 形态；device 为空 = 跳过④（纯 PC 对比）
+    // 路径参数须为 WSL 形态；device 为空 = 跳过④（纯 PC 对比）；dumpDir = 标注图落盘目录
     void start(const QString &distro, const QString &scriptWsl,
                const QString &onnxWsl, const QString &imageWsl,
                const QString &device, const QString &meanstd,
-               const QString &datasetWsl);
+               const QString &datasetWsl, const QString &dumpDir);
     void stop();
 
 signals:
