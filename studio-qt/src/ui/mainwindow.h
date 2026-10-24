@@ -99,12 +99,14 @@ private:
     // LIVE 左列推理信息卡
     QTextEdit *m_inferInfo = nullptr;
     // ONNX LAB 页
-    QStackedWidget *m_views = nullptr;         // 页面栈：0=LIVE 1=ONNX LAB 2=RKNN LAB 3=WORKFLOW
+    QStackedWidget *m_views = nullptr;         // 页面栈：0=LIVE 1=模型实验室 2=WORKFLOW
+    QStackedWidget *m_labStack = nullptr;      // 实验室内部子页栈：0=ONNX 基线 1=模拟量化
     QPushButton *m_navLive = nullptr;          // 导航页签（与页面栈双向同步）
-    QPushButton *m_navInfer = nullptr;
-    QPushButton *m_navRknn = nullptr;
+    QPushButton *m_navLab = nullptr;           // 模型实验室页签（合并 ONNX LAB + RKNN LAB）
+    QPushButton *m_segInfer = nullptr;         // 实验室内部段：ONNX 基线
+    QPushButton *m_segSim = nullptr;           // 实验室内部段：模拟量化
     QPushButton *m_navWorkflow = nullptr;
-    WorkflowPage *m_workflow = nullptr;        // 工作流配置器（第四页）
+    WorkflowPage *m_workflow = nullptr;        // 工作流配置器页
     PreviewWidget *m_inferPreview = nullptr;   // 推理结果大屏
     QLabel *m_inferStats = nullptr;            // 推理细节条
     // RKNN LAB 页（toolkit2 模拟器）

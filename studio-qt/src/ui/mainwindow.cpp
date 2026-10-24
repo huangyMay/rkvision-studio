@@ -285,28 +285,22 @@ void MainWindow::buildUi() {
     navLive->setObjectName("NavTab");
     navLive->setCheckable(true);
     navLive->setChecked(true);
-    auto *navInfer = new QPushButton(QStringLiteral("⚡ ONNX LAB / 本地推理"));
-    navInfer->setObjectName("NavTab");
-    navInfer->setCheckable(true);
-    auto *navRknn = new QPushButton(QStringLiteral("🧩 RKNN LAB / 模拟推理"));
-    navRknn->setObjectName("NavTab");
-    navRknn->setCheckable(true);
+    auto *navLab = new QPushButton(QStringLiteral("🧪 模型实验室 / 精度分析"));
+    navLab->setObjectName("NavTab");
+    navLab->setCheckable(true);
     auto *navWorkflow = new QPushButton(QStringLiteral("🛠 WORKFLOW / 工作流"));
     navWorkflow->setObjectName("NavTab");
     navWorkflow->setCheckable(true);
     m_navLive = navLive;
-    m_navInfer = navInfer;
-    m_navRknn = navRknn;
+    m_navLab = navLab;
     m_navWorkflow = navWorkflow;
     auto *navGroup = new QButtonGroup(this);
     navGroup->setExclusive(true);
     navGroup->addButton(navLive);
-    navGroup->addButton(navInfer);
-    navGroup->addButton(navRknn);
+    navGroup->addButton(navLab);
     navGroup->addButton(navWorkflow);
     nl->addWidget(navLive);
-    nl->addWidget(navInfer);
-    nl->addWidget(navRknn);
+    nl->addWidget(navLab);
     nl->addWidget(navWorkflow);
     nl->addStretch();
     root->addWidget(nav);
@@ -562,8 +556,35 @@ void MainWindow::buildUi() {
             });
 
     // ---- 页 1：ONNX LAB 本地推理（模型/图片 + 独立大屏 + 推理细节条） ----
+    // ---- 页 1：模型实验室（合并 ONNX LAB + RKNN LAB，内部分段切换）----
+    auto *pageLab = new QWidget;
+    m_views->addWidget(pageLab);                     // m_views index 1
+    auto *labOuter = new QVBoxLayout(pageLab);
+    labOuter->setContentsMargins(0, 0, 0, 0);
+    labOuter->setSpacing(0);
+    auto *segRow = new QHBoxLayout;
+    segRow->setContentsMargins(14, 10, 14, 0);
+    segRow->setSpacing(8);
+    m_segInfer = new QPushButton(QStringLiteral("⚡ ONNX 基线 / 本地推理"));
+    m_segInfer->setObjectName("NavTab");
+    m_segInfer->setCheckable(true);
+    m_segInfer->setChecked(true);
+    m_segSim = new QPushButton(QStringLiteral("🧩 模拟量化 / 板端验证"));
+    m_segSim->setObjectName("NavTab");
+    m_segSim->setCheckable(true);
+    auto *segGroup = new QButtonGroup(this);
+    segGroup->setExclusive(true);
+    segGroup->addButton(m_segInfer);
+    segGroup->addButton(m_segSim);
+    segRow->addWidget(m_segInfer);
+    segRow->addWidget(m_segSim);
+    segRow->addStretch();
+    labOuter->addLayout(segRow);
+    m_labStack = new QStackedWidget;
+    labOuter->addWidget(m_labStack, 1);
+
     auto *pageInfer = new QWidget;
-    m_views->addWidget(pageInfer);
+    m_labStack->addWidget(pageInfer);                // labStack index 0
     auto *ibody = new QHBoxLayout(pageInfer);
     ibody->setContentsMargins(14, 14, 14, 14);
     ibody->setSpacing(14);
@@ -652,13 +673,14 @@ void MainWindow::buildUi() {
     iright->addWidget(statsBar);
 
     connect(navLive, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(0); });
-    connect(navInfer, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(1); });
-    connect(navRknn, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(2); });
-    connect(m_navWorkflow, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(3); });
+    connect(m_navLab, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(1); });
+    connect(m_navWorkflow, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(2); });
+    connect(m_segInfer, &QPushButton::clicked, this, [this] { m_labStack->setCurrentIndex(0); });
+    connect(m_segSim, &QPushButton::clicked, this, [this] { m_labStack->setCurrentIndex(1); });
 
     // ---- 页 2：RKNN LAB 模拟推理（toolkit2 模拟器：ONNX+转换配置 → build → 模拟） ----
     auto *pageRknn = new QWidget;
-    m_views->addWidget(pageRknn);
+    m_labStack->addWidget(pageRknn);                 // labStack index 1
     auto *rbody = new QHBoxLayout(pageRknn);
     rbody->setContentsMargins(14, 14, 14, 14);
     rbody->setSpacing(14);
@@ -992,8 +1014,9 @@ QImage MainWindow::annotateImage(const OnnxResult &r) {
 }
 
 void MainWindow::autoRunInfer(const QString &image, const QString &model) {
-    m_views->setCurrentIndex(1);               // 截图回归直接切到 ONNX LAB 页
-    m_navInfer->setChecked(true);              // 页签与页面栈同步
+    m_views->setCurrentIndex(1);               // 回归：切到模型实验室页
+    m_labStack->setCurrentIndex(0);            // 回归：实验室子页=ONNX 基线
+    m_segInfer->setChecked(true);
     m_imagePath->setText(image);
     m_modelPath->setText(model);
     onInfer();
@@ -1121,8 +1144,9 @@ void MainWindow::onRknnSim() {
 
 void MainWindow::autoRunRknnSim(const QString &image, const QString &model,
                                 const QString &meanstd) {
-    m_views->setCurrentIndex(2);               // 截图回归切到 RKNN LAB 页
-    m_navRknn->setChecked(true);
+    m_views->setCurrentIndex(1);               // 回归：切到模型实验室页
+    m_labStack->setCurrentIndex(1);            // 回归：实验室子页=模拟量化
+    m_segSim->setChecked(true);
     m_rkImagePath->setText(image);
     m_rkModelPath->setText(model);
     if (!meanstd.isEmpty()) m_rkMeanStd->setText(meanstd);
