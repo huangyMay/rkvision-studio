@@ -7,6 +7,7 @@
 #include "core/boardperf.h"
 #include "core/inferstream.h"
 #include "core/onnxanalyzer.h"
+#include "core/onnxprobe.h"
 #include "core/onnxrunner.h"
 #include "core/projectregistry.h"
 #include "core/rknnsimrunner.h"
@@ -92,6 +93,57 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                   "#3ecf72");
     });
     m_analyzer = new OnnxAnalyzer(this);
+    m_probe = new OnnxProbeRunner(this);
+    connect(m_probe, &OnnxProbeRunner::logLine, this, &MainWindow::appendLog);
+    connect(m_probe, &OnnxProbeRunner::finished, this, [this](bool ok, const QString &json,
+                                                              const QString &err) {
+        m_btnProbe->setEnabled(true);
+        if (!ok) {
+            appendLog(QStringLiteral("逐层体检失败: %1").arg(err), "#ff6b6b");
+            QMessageBox::warning(this, QStringLiteral("逐层体检"), err);
+            return;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+        const QJsonObject o = doc.object();
+        const QJsonArray sens = o.value("sensitive").toArray();
+        QString sensStr;
+        for (const QJsonValue &v : sens) {
+            const QJsonObject s = v.toObject();
+            sensStr += QStringLiteral("%1（outlier ×%2）<br>")
+                           .arg(s.value("name").toString().toHtmlEscaped())
+                           .arg(s.value("outlier").toDouble(), 0, 'f', 1);
+        }
+        if (sensStr.isEmpty())
+            sensStr = QStringLiteral("无——逐层激活分布温和，int8 量化风险低");
+        const QJsonArray layers = o.value("layers").toArray();
+
+        QDialog dlg(this);
+        dlg.setWindowTitle(QStringLiteral("逐层体检 — %1").arg(o.value("model").toString()));
+        dlg.resize(980, 680);
+        auto *v = new QVBoxLayout(&dlg);
+        auto *sum = new QLabel(QStringLiteral(
+            "<b>%1</b> · 输入 %2×%3 · 推理 <b>%4 ms</b> · 层数 <b>%5</b><br>"
+            "<b>量化敏感层（outlier 比 > 10，int8 按 max 定 scale 会压掉小值分辨率）</b>：<br>%6")
+            .arg(o.value("model").toString().toHtmlEscaped())
+            .arg(o.value("input_hw").toArray().at(0).toInt())
+            .arg(o.value("input_hw").toArray().at(1).toInt())
+            .arg(o.value("total_ms").toDouble(), 0, 'f', 0)
+            .arg(o.value("n_layers").toInt())
+            .arg(sensStr));
+        sum->setWordWrap(true);
+        v->addWidget(sum);
+        auto *te = new QTextEdit;
+        te->setReadOnly(true);
+        te->setPlainText(o.value("table").toString());
+        QFont mono(QStringLiteral("Consolas"));
+        mono.setStyleHint(QFont::Monospace);
+        te->setFont(mono);
+        v->addWidget(te, 1);
+        auto *hint = new QLabel(
+            QStringLiteral("完整报告（markdown）: %1").arg(o.value("report").toString().toHtmlEscaped()));
+        v->addWidget(hint);
+        dlg.exec();
+    });
     connect(m_analyzer, &OnnxAnalyzer::finished, this, [this](const OnnxAnalysis &r) {
         m_btnAnalyze->setEnabled(true);
         if (!r.ok) {
@@ -569,15 +621,18 @@ void MainWindow::buildUi() {
     m_btnInfer->setObjectName("Primary");
     modelL->addWidget(m_btnInfer);
     connect(m_btnInfer, &QPushButton::clicked, this, &MainWindow::onInfer);
-    // 模型分析 / Netron 查看一行两钮
+    // 模型分析 / Netron / 逐层体检 一行三钮
     auto *toolRow = new QHBoxLayout;
     toolRow->setSpacing(8);
     m_btnAnalyze = new QPushButton(QStringLiteral("📊 模型分析"));
+    m_btnProbe = new QPushButton(QStringLiteral("🧪 逐层体检"));
     m_btnNetron = new QPushButton(QStringLiteral("🔍 Netron"));
     toolRow->addWidget(m_btnAnalyze, 1);
+    toolRow->addWidget(m_btnProbe, 1);
     toolRow->addWidget(m_btnNetron, 1);
     modelL->addLayout(toolRow);
     connect(m_btnAnalyze, &QPushButton::clicked, this, &MainWindow::onAnalyze);
+    connect(m_btnProbe, &QPushButton::clicked, this, &MainWindow::onProbe);
     connect(m_btnNetron, &QPushButton::clicked, this, &MainWindow::onNetronView);
     ileft->addStretch();
 
@@ -1015,6 +1070,31 @@ void MainWindow::showAnalysis(const OnnxAnalysis &a) {
     connect(close, &QPushButton::clicked, &dlg, &QDialog::accept);
     v->addWidget(close, 0, Qt::AlignRight);
     dlg.exec();
+}
+
+void MainWindow::onProbe() {
+    if (m_probe->running()) return;
+    const QString onnx = m_modelPath->text().trimmed();
+    if (onnx.isEmpty() || !QFileInfo::exists(onnx) || !onnx.endsWith(QStringLiteral(".onnx"), Qt::CaseInsensitive)) {
+        QMessageBox::warning(this, QStringLiteral("逐层体检"), QStringLiteral("请先选择有效的 .onnx 模型"));
+        return;
+    }
+    const QString image = m_imagePath->text().trimmed();
+    if (image.isEmpty() || !QFileInfo::exists(image)) {
+        QMessageBox::warning(this, QStringLiteral("逐层体检"),
+                             QStringLiteral("请先选择一张输入图片（体检 = 对这张图跑一次全层推理）"));
+        return;
+    }
+    const QString outDir = QDir::temp().filePath(QStringLiteral("onnx_probe_out"));
+    m_btnProbe->setEnabled(false);
+    appendLog(QStringLiteral("逐层体检: %1 ← %2（图手术暴露全部中间输出，纯 PC）")
+                  .arg(QFileInfo(onnx).fileName(), QFileInfo(image).fileName()), "#8b97a8");
+    m_probe->start(QStringLiteral("Ubuntu-22.04"),
+                   OnnxRunner::toWslPath(QString::fromUtf8(RVS_TOOLS_DIR) +
+                                         QStringLiteral("/onnx_probe.py")),
+                   OnnxRunner::toWslPath(onnx),
+                   OnnxRunner::toWslPath(image),
+                   QStringLiteral("/tmp/onnx_probe_out"));
 }
 
 void MainWindow::onRknnSim() {

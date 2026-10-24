@@ -21,6 +21,7 @@ add_executable(rvs_studio
     src/core/boardperf.cpp
     src/core/boardmonitor.cpp
     src/core/boardacc.cpp
+    src/core/onnxprobe.cpp
     src/core/inferstream.cpp
     src/model/pipelinespec.cpp
     src/model/workflowgen.cpp

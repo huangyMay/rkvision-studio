@@ -9,6 +9,7 @@ class InferStream;
 class MjpegClient;
 class OnnxAnalyzer;
 class OnnxRunner;
+class OnnxProbeRunner;
 class PreviewWidget;
 class RknnSimRunner;
 class BoardAccRunner;
@@ -42,6 +43,7 @@ private slots:
     void onPreviewStop();
     void onInfer();
     void onAnalyze();
+    void onProbe();
     void onNetronView();
     void onRknnSim();
     void onBoardPerf();
@@ -82,9 +84,11 @@ private:
     QDoubleSpinBox *m_iouSpin = nullptr;       // NMS IoU 阈值
     QPushButton *m_btnInfer = nullptr;
     QPushButton *m_btnAnalyze = nullptr;       // 📊 模型分析
+    QPushButton *m_btnProbe = nullptr;         // 🧪 逐层体检（量化友好度）
     QPushButton *m_btnNetron = nullptr;        // 🔍 Netron 查看
     OnnxRunner *m_onnx = nullptr;
     OnnxAnalyzer *m_analyzer = nullptr;
+    OnnxProbeRunner *m_probe = nullptr;
     class QProcess *m_netronProc = nullptr;
     // 右主区（LIVE 页）
     PreviewWidget *m_preview = nullptr;
