@@ -185,12 +185,28 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         appendLog(QStringLiteral("量化精度完成: %1 层，最低 sim_single_cos=%2")
                       .arg(layers.size())
                       .arg(minSingle, 0, 'f', 5), "#3ecf72");
-        QMessageBox::information(this, QStringLiteral("量化精度分析（逐层余弦）"),
-                                 QStringLiteral("层数: %1   最低 sim_single_cos: %2\n"
-                                                "完整表: %3/error_analysis.txt\n\n%4")
-                                     .arg(layers.size())
-                                     .arg(minSingle, 0, 'f', 5)
-                                     .arg(outDir, table));
+        // 可滚动可拖放的表格对话框（QMessageBox 装不下长表且无滚动条）
+        QDialog dlg(this);
+        dlg.setWindowTitle(QStringLiteral("量化精度分析（逐层余弦）— %1 层，最低 sim_single %2")
+                               .arg(layers.size())
+                               .arg(minSingle, 0, 'f', 5));
+        dlg.resize(1000, 720);
+        auto *v = new QVBoxLayout(&dlg);
+        auto *sum = new QLabel(QStringLiteral(
+            "层数 <b>%1</b> · 最低 sim_single_cos <b>%2</b> · 逐层明细 %3/error_analysis.txt")
+            .arg(layers.size())
+            .arg(minSingle, 0, 'f', 5)
+            .arg(outDir.toHtmlEscaped()));
+        sum->setWordWrap(true);
+        v->addWidget(sum);
+        auto *te = new QTextEdit;
+        te->setReadOnly(true);
+        te->setPlainText(table);
+        QFont mono(QStringLiteral("Consolas"));
+        mono.setStyleHint(QFont::Monospace);
+        te->setFont(mono);
+        v->addWidget(te, 1);
+        dlg.exec();
     });
     connect(m_rknn, &RknnSimRunner::finished, this, [this](const OnnxResult &r) {
         m_btnRkSim->setEnabled(true);
