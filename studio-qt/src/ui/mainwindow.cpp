@@ -4,6 +4,7 @@
 #include "core/mjpegclient.h"
 #include "core/boardmonitor.h"
 #include "core/boardacc.h"
+#include "core/acccompare.h"
 #include "core/boardperf.h"
 #include "core/inferstream.h"
 #include "core/onnxanalyzer.h"
@@ -155,6 +156,86 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         showAnalysis(r);
     });
     m_rknn = new RknnSimRunner(this);
+    m_compare = new AccCompareRunner(this);
+    connect(m_compare, &AccCompareRunner::logLine, this, &MainWindow::appendLog);
+    connect(m_compare, &AccCompareRunner::finished, this, [this](bool ok, const QString &json,
+                                                                 const QString &err) {
+        m_btnCompare->setEnabled(true);
+        if (!ok) {
+            appendLog(QStringLiteral("精度对比失败: %1").arg(err), "#ff6b6b");
+            QMessageBox::warning(this, QStringLiteral("精度对比"), err);
+            return;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+        const QJsonObject o = doc.object();
+        const QJsonObject stages = o.value("stages").toObject();
+        const QJsonObject match = o.value("match").toObject();
+        const QJsonObject tcos = o.value("tensor_cosine").toObject();
+        auto nOf = [&stages](const QString &k) {
+            return stages.value(k).toObject().value("n").toInt(-1);
+        };
+        auto miouOf = [&match](const QString &k) {
+            return match.value(k).toObject().value("mean_iou").toDouble(-1);
+        };
+        auto dropOf = [&match](const QString &k) {
+            // 框级 conf 掉点均值（matched 框的 dconf 平均，负=变自信差）
+            const QJsonArray drops = match.value(k).toObject().value("conf_drops").toArray();
+            if (drops.isEmpty()) return 0.0;
+            double s = 0;
+            for (const QJsonValue &v : drops) s += v.toDouble();
+            return s / drops.size();
+        };
+        auto cosAvg = [&tcos](const QString &k) {
+            const QJsonArray a = tcos.value(k).toArray();
+            if (a.isEmpty()) return 0.0;
+            double s = 0;
+            for (const QJsonValue &v : a) s += v.toDouble();
+            return s / a.size();
+        };
+        auto line = [](const QString &tag, int n, double miou, double drop, double cos) {
+            return QStringLiteral("%1  检出 %2 框 · mean IoU %3 · conf 掉点 %4 · 张量余弦 %5\n")
+                .arg(tag, -22)
+                .arg(n)
+                .arg(miou, 0, 'f', 4)
+                .arg(drop, 0, 'f', 4)
+                .arg(cos, 0, 'f', 5);
+        };
+        QString body = QStringLiteral("① ONNX 基线（float，金标准）\n\n");
+        body += line(QStringLiteral("② RKNN FP16 模拟"), nOf("2_fp16_sim"),
+                     miouOf("2_vs_1"), dropOf("2_vs_1"), cosAvg("2_vs_1"));
+        body += line(QStringLiteral("③ RKNN int8 模拟"), nOf("3_int8_sim"),
+                     miouOf("3_vs_1"), dropOf("3_vs_1"), cosAvg("3_vs_1"));
+        const QJsonObject st4 = stages.value("4_board").toObject();
+        if (st4.contains("n")) {
+            body += line(QStringLiteral("④ 板上 int8"), st4.value("n").toInt(),
+                         miouOf("4_vs_1"), dropOf("4_vs_1"), cosAvg("4_vs_1"));
+        } else {
+            body += QStringLiteral("④ 板上 int8  —— 板离线，跳过\n");
+        }
+        body += QStringLiteral("\n判读: ②掉点=转换损失(应≈0) · ③掉点=量化损失 · ④-③=板端实现差异\n"
+                               "量化损失偏大 → 混合量化（敏感层 fp16）；框缺失(missed>0) → 该级严重失真");
+
+        QDialog dlg(this);
+        dlg.setWindowTitle(QStringLiteral("四级精度对比 — %1 @ %2")
+                               .arg(o.value("model").toString(),
+                                    o.value("image").toString()));
+        dlg.resize(860, 460);
+        auto *v = new QVBoxLayout(&dlg);
+        auto *sum = new QLabel(QStringLiteral(
+            "基准：① ONNX float32（检出 %1 框） · 输入 %2 · 总耗时 %3 s")
+            .arg(nOf("1_onnx"))
+            .arg(o.value("input_size").toInt())
+            .arg(o.value("total_ms").toDouble() / 1000, 0, 'f', 1));
+        v->addWidget(sum);
+        auto *te = new QTextEdit;
+        te->setReadOnly(true);
+        te->setPlainText(body);
+        QFont mono(QStringLiteral("Consolas"));
+        mono.setStyleHint(QFont::Monospace);
+        te->setFont(mono);
+        v->addWidget(te, 1);
+        dlg.exec();
+    });
     m_acc = new BoardAccRunner(this);
     connect(m_acc, &BoardAccRunner::logLine, this, &MainWindow::appendLog);
     connect(m_acc, &BoardAccRunner::finished, this, [this](bool ok, const QString &json,
@@ -772,6 +853,11 @@ void MainWindow::buildUi() {
     mkSpin(&m_rkIouSpin, 0.45);
     rkParamRow->addWidget(m_rkIouSpin);
     rkL->addLayout(rkParamRow);
+    // ⚖️ 精度对比：四级漏斗一键对比（ONNX→FP16→int8→板上），一幕了然
+    m_btnCompare = new QPushButton(QStringLiteral("⚖️ 精度对比（ONNX vs FP16 vs int8 vs 板上，一键四级）"));
+    m_btnCompare->setObjectName("Primary");
+    rkL->addWidget(m_btnCompare);
+    connect(m_btnCompare, &QPushButton::clicked, this, &MainWindow::onAccCompare);
     m_btnRkSim = new QPushButton(QStringLiteral("⚡ 模拟推理（含 build 编译，首次较慢）"));
     m_btnRkSim->setObjectName("Primary");
     rkL->addWidget(m_btnRkSim);
@@ -1222,6 +1308,46 @@ void MainWindow::onBoardPerf() {
     const QString engineDir = resolveProjectsRoot() + QStringLiteral("/../build-board/engine");
     m_boardPerf->run(serial, rknn, image,
                      QStringLiteral("/data/local/tmp/rvs"), engineDir, 5);
+}
+
+void MainWindow::onAccCompare() {
+    if (m_compare->running()) return;
+    const QString onnx = m_rkModelPath->text().trimmed();
+    if (onnx.isEmpty() || !QFileInfo::exists(onnx) || !onnx.endsWith(QStringLiteral(".onnx"), Qt::CaseInsensitive)) {
+        QMessageBox::warning(this, QStringLiteral("精度对比"), QStringLiteral("请先选择有效的 .onnx 模型"));
+        return;
+    }
+    const QString image = m_rkImagePath->text().trimmed();
+    if (image.isEmpty() || !QFileInfo::exists(image)) {
+        QMessageBox::warning(this, QStringLiteral("精度对比"), QStringLiteral("请先选择一张对比图片"));
+        return;
+    }
+    // 校准集：当前=所选一张图（数据闭环后可扩多图）
+    const QString dsLocal = QDir::temp().filePath(QStringLiteral("rvs_acc_dataset.txt"));
+    {
+        QFile ds(dsLocal);
+        if (!ds.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QMessageBox::warning(this, QStringLiteral("精度对比"), QStringLiteral("无法写 dataset.txt"));
+            return;
+        }
+        ds.write((OnnxRunner::toWslPath(image) + QStringLiteral("\n")).toUtf8());
+    }
+    QString meanstd = m_rkMeanStd->text().trimmed();
+    if (meanstd.isEmpty() || meanstd.contains(QStringLiteral("none")))
+        meanstd = QStringLiteral("0,0,0|255,255,255");
+    meanstd.replace(QLatin1Char('|'), QLatin1Char('/'));
+    const QString device = m_accDevice->text().trimmed();   // 空则跳过④
+
+    m_btnCompare->setEnabled(false);
+    appendLog(QStringLiteral("精度对比: %1（四级漏斗，约 3~6 分钟）")
+                  .arg(QFileInfo(onnx).fileName()), "#8b97a8");
+    m_compare->start(QStringLiteral("Ubuntu-22.04"),
+                     OnnxRunner::toWslPath(QString::fromUtf8(RVS_TOOLS_DIR) +
+                                           QStringLiteral("/acc_compare.py")),
+                     OnnxRunner::toWslPath(onnx),
+                     OnnxRunner::toWslPath(image),
+                     device, meanstd,
+                     OnnxRunner::toWslPath(dsLocal));
 }
 
 void MainWindow::onBoardAcc() {
