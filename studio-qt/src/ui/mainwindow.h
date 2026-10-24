@@ -128,7 +128,6 @@ private:
     QTableWidget *m_cmpSimTable = nullptr;     // 对比视图：模拟器逐层
     QTableWidget *m_cmpRtTable = nullptr;      // 对比视图：板端逐层
     QLabel *m_cmpRightTitle = nullptr;
-    QLabel *m_cmpSummary = nullptr;            // 对比视图：四级漏斗摘要
     QPushButton *m_btnExport = nullptr;        // 💾 导出报告
     QString m_lastCompareJson;                 // 最近一次精度分析的原始 JSON（导出用）
     QString m_cmpDumpDir;                      // 最近一次对比的标注图目录

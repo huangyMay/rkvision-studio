@@ -38,13 +38,15 @@ def run_onnx(onnx_path, blob, input_size, scale, left, top, conf_th, iou_th):
     return outs
 
 
-def build_rknn(onnx_path, quant, dataset, mean, std):
+def build_rknn(onnx_path, quant, dataset, mean, std, quant_dtype=None):
     from rknn.api import RKNN
     rknn = RKNN(verbose=False)
     kw = {"target_platform": "rk3576"}
     if mean is not None:
         kw["mean_values"] = mean
         kw["std_values"] = std
+    if quant and quant_dtype:
+        kw["quantized_dtype"] = quant_dtype
     if rknn.config(**kw) != 0:
         raise RuntimeError("config failed")
     if rknn.load_onnx(model=onnx_path) != 0:
@@ -281,46 +283,46 @@ def main():
     except Exception:
         pass
 
-    # ④ 板上 int8（量化构建 → 真板推理；量化损失在板上实测）
+    # ④ 板上 int16（w16a16i 量化构建 → 真板推理）
     d4 = None
     rk_i8 = None
     if not dataset:
         print(json.dumps({"ok": False,
-                          "error": "④ int8 需要校准集 dataset.txt（每行一张图）"}))
+                          "error": "④ int16 需要校准集 dataset.txt（每行一张图）"}))
         return
     if device:
-        log("④ 开始 int8 量化转换（build do_quantization=True + 校准集）…")
+        log("④ 开始 int16 量化转换（quantized_dtype=w16a16i + 校准集）…")
         t0 = time.time()
         try:
-            rk_i8 = build_rknn(onnx_path, True, dataset, mean, std)
-            log("④ int8 转换完成，开始板上推理…")
+            rk_i8 = build_rknn(onnx_path, True, dataset, mean, std, quant_dtype="w16a16i")
+            log("④ int16 转换完成，开始板上推理（w16a16i 在 RK3576 可能部分回退 CPU，速度较慢）…")
             o4, d4, _ = rknn_infer_decode(rk_i8, nhwc, input_size, scale, left, top,
                                           conf_th, iou_th, target="rk3576", device=device)
-            report["stages"]["4_board_int8"] = {"ms": round((time.time() - t0) * 1000, 1),
-                                                "n": len(d4) if d4 else 0}
+            report["stages"]["4_board_int16"] = {"ms": round((time.time() - t0) * 1000, 1),
+                                                 "n": len(d4) if d4 else 0}
             report["tensor_cosine"]["4_vs_1"] = tensor_cosine(outs1, o4)
             b4 = [[d[0], d[1], d[2], d[3], d[4]] for d in (d4 or [])]
-            report["match"]["4_vs_1"] = match_report(base, b4, "板上int8 vs ONNX")
-            log(f"④ 板上 int8 完成: 检出 {len(b4)} 框 · mean IoU "
+            report["match"]["4_vs_1"] = match_report(base, b4, "板上int16 vs ONNX")
+            log(f"④ 板上 int16 完成: 检出 {len(b4)} 框 · mean IoU "
                 f"{report['match']['4_vs_1'].get('mean_iou', 0)}")
-            emit_stage("4_board_int8", {"image": stage_image("board_result.jpg",
-                                                             draw(img, d4, (0, 128, 255), "board"))})
+            emit_stage("4_board_int16", {"image": stage_image("board_result.jpg",
+                                                              draw(img, d4, (0, 128, 255), "board"))})
         except Exception as e:  # noqa: BLE001
-            report["stages"]["4_board_int8"] = {"error": str(e)[:200]}
-            report["match"]["4_vs_1"] = {"label": "板上int8", "error": str(e)[:200]}
-            log(f"④ 板上 int8 失败: {str(e)[:120]}")
-            emit_stage("4_board_int8")
+            report["stages"]["4_board_int16"] = {"error": str(e)[:200]}
+            report["match"]["4_vs_1"] = {"label": "板上int16", "error": str(e)[:200]}
+            log(f"④ 板上 int16 失败: {str(e)[:120]}")
+            emit_stage("4_board_int16")
 
-    # 逐层精度（复用 ④ 的 int8 RKNN 对象直接 accuracy_analysis——不重新构建）。
+    # 逐层精度（复用 ④ 的 int16 RKNN 对象直接 accuracy_analysis——不重新构建）。
     # 板可达 → sim+runtime 双列；板失败 → 回退 target=None（仅 simulator 列，仍可定位量化敏感层）
     if dump_dir:
         layers = []
-        if rk_i8 is None:                             # 板离线时 ④ 未建 int8，此处补建
-            log("④ 补建 int8 模型（accuracy_analysis 用）…")
+        if rk_i8 is None:                             # 板离线时 ④ 未建 int16，此处补建
+            log("④ 补建 int16 模型（accuracy_analysis 用）…")
             try:
-                rk_i8 = build_rknn(onnx_path, True, dataset, mean, std)
+                rk_i8 = build_rknn(onnx_path, True, dataset, mean, std, quant_dtype="w16a16i")
             except Exception as e:  # noqa: BLE001
-                report["layers_error"] = f"int8 补建失败: {str(e)[:150]}"
+                report["layers_error"] = f"int16 补建失败: {str(e)[:150]}"
                 rk_i8 = None
         from rknn_acc import parse_error_analysis
         acc_dir = os.path.join(dump_dir, "acc")

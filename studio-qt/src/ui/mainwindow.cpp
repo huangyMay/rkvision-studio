@@ -182,11 +182,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                 const QString st = o.value("stage").toString();
                 if (st == QStringLiteral("1_onnx")) dst = m_imgOnnx;
                 else if (st == QStringLiteral("2_board_fp16")) dst = m_imgFp16;
-                else if (st == QStringLiteral("4_board_int8")) dst = m_imgBoard;
+                else if (st == QStringLiteral("4_board_int16")) dst = m_imgBoard;
                 dst->setImage(im);
             }
         }
-        updateCompareSummary(o);
     });
     connect(m_compare, &AccCompareRunner::layersUpdate, this, [this](const QString &json) {
         fillLayerTables(QJsonDocument::fromJson(json.toUtf8()).array());
@@ -201,7 +200,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             return;
         }
         const QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
-        updateCompareSummary(o);
+        updateCompareSummary(o);                  // 漏斗摘要进信息面板（不在对比面板显示）
         m_lastCompareJson = json;                 // 供 💾 导出
         m_cmpDumpDir = o.value("dump_dir").toString();
         appendLog(QStringLiteral("四级对比完成（%1 s）——逐层表 %2")
@@ -894,11 +893,6 @@ void MainWindow::buildUi() {
     cvTail->addWidget(m_btnExport);
     cvLayout->addLayout(cvTail);
 
-    m_cmpSummary = new QLabel(QStringLiteral(
-        "点「⚖️精度对比」→ 四级逐级流式显示：每完成一级，对应图片与数字即时出现"));
-    m_cmpSummary->setWordWrap(true);
-    cvLayout->addWidget(m_cmpSummary);
-
     // 内容区整体套 QScrollArea：任何屏幕/任何内容量都不丢按钮（固定窗口+滚动条）
     m_cmpViewStack = new QStackedWidget;
     auto *cmpScroll = new QScrollArea;
@@ -968,7 +962,7 @@ void MainWindow::buildUi() {
     mkMetric(&m_metricOnnx, QStringLiteral("① ONNX 基线"));
     mkMetric(&m_metricFp16, QStringLiteral("② 板上 FP16"));
     mkMetric(&m_metricFp16Sim, QStringLiteral("③ FP16 模拟"));
-    mkMetric(&m_metricInt8, QStringLiteral("④ 板上 int8"));
+    mkMetric(&m_metricInt8, QStringLiteral("④ 板上 int16"));
     dv->addLayout(metricRow);
     auto *tablesRow = new QHBoxLayout;
     tablesRow->setSpacing(6);
@@ -1452,7 +1446,6 @@ void MainWindow::onAccCompare() {
     m_imgFp16->setPlaceholder(QStringLiteral("板离线/未跑（② 板上 FP16）"));
     m_imgFp16Sim->setPlaceholder(QStringLiteral("③ 构建中…"));
     m_imgBoard->setPlaceholder(QStringLiteral("④ 板离线/未跑"));
-    m_cmpSummary->setText(QStringLiteral("四级对比运行中…（① ONNX → ② 板上FP16 → ③ FP16模拟 → ④ 板上int8）"));
     // dump 目录给 Windows 路径：WSL python 经 /mnt/c 写入（norm_path 自动转），
     // Qt 直接用原路径读——同一物理目录，两侧一致
     const QString dumpWin = QDir::temp().filePath(QStringLiteral("acc_dump"));
@@ -1466,7 +1459,7 @@ void MainWindow::onAccCompare() {
                      dumpWin);
 }
 
-// 对比视图漏斗摘要：从 stages/match/tensor_cosine 构建文案，流式渐进刷新
+// 漏斗摘要：构建文案并写入信息面板（不在对比面板显示），仅在 finished 调用一次
 void MainWindow::updateCompareSummary(const QJsonObject &o) {
     const QJsonObject stages = o.value("stages").toObject();
     const QJsonObject match = o.value("match").toObject();
@@ -1506,21 +1499,21 @@ void MainWindow::updateCompareSummary(const QJsonObject &o) {
     if (nOf("3_fp16_sim") >= 0)
         body += QStringLiteral("<br>") + line(QStringLiteral("③ FP16 模拟（参考）"),
             nOf("3_fp16_sim"), miouOf("3_vs_1"), dropOf("3_vs_1"), cosAvg("3_vs_1"));
-    const QJsonObject st4 = secOf("4_board_int8");
+    const QJsonObject st4 = secOf("4_board_int16");
     if (st4.contains("n"))
-        body += QStringLiteral("<br>") + line(QStringLiteral("④ 板上 int8"),
+        body += QStringLiteral("<br>") + line(QStringLiteral("④ 板上 int16"),
             st4.value("n").toInt(), miouOf("4_vs_1"), dropOf("4_vs_1"), cosAvg("4_vs_1"));
     else if (st4.contains("error"))
-        body += QStringLiteral("<br>④ 板上 int8 —— 连接失败（查设备地址/rknn_server）");
+        body += QStringLiteral("<br>④ 板上 int16 —— 连接失败（查设备地址/rknn_server）");
     else
-        body += QStringLiteral("<br>④ 板上 int8 —— 设备地址为空，跳过");
+        body += QStringLiteral("<br>④ 板上 int16 —— 设备地址为空，跳过");
     if (o.contains(QStringLiteral("min_single")))
         body += QStringLiteral("<br>逐层: %1 层 · 最低 sim_single %2 · 低余弦 %3 层")
             .arg(o.value("layers").toArray().size())
             .arg(o.value("min_single").toDouble(), 0, 'f', 5)
             .arg(o.value("n_low").toInt());
-    body += QStringLiteral("<br><i>判读: ②掉点=转换损失(应≈0) · ③掉点=量化损失 · ④-③=板端实现差异</i>");
-    m_cmpSummary->setText(QStringLiteral("<b>%1</b> @ %2 · 基准 ① ONNX float32（检出 %3 框）%4<br>%5")
+    body += QStringLiteral("<br><i>判读: ②掉点=转换损失(应≈0) · ④-③=量化+实现差异</i>");
+    m_cmpLog->append(QStringLiteral("<b>%1</b> @ %2 · 基准 ① ONNX float32（检出 %3 框）%4<br>%5")
                               .arg(o.value("model").toString().toHtmlEscaped(),
                                    o.value("image").toString().toHtmlEscaped())
                               .arg(nOf("1_onnx"))
@@ -1535,14 +1528,14 @@ void MainWindow::updateCompareSummary(const QJsonObject &o) {
             .arg(n).arg(miou, 0, 'f', 4).arg(drop, 0, 'f', 4).arg(cos, 0, 'f', 5);
     };
     const bool e2 = stages.value("2_board_fp16").toObject().contains(QStringLiteral("error"));
-    const bool e4 = stages.value("4_board_int8").toObject().contains(QStringLiteral("error"));
+    const bool e4 = stages.value("4_board_int16").toObject().contains(QStringLiteral("error"));
     m_metricOnnx->setText(QStringLiteral("检出 %1 框\nfloat32 基准\n金标准")
                               .arg(nOf("1_onnx")));
     m_metricFp16->setText(metric(nOf("2_board_fp16"), miouOf("2_vs_1"),
                                  dropOf("2_vs_1"), cosAvg("2_vs_1"), e2));
     m_metricFp16Sim->setText(metric(nOf("3_fp16_sim"), miouOf("3_vs_1"),
                                     dropOf("3_vs_1"), cosAvg("3_vs_1"), false));
-    m_metricInt8->setText(metric(nOf("4_board_int8"), miouOf("4_vs_1"),
+    m_metricInt8->setText(metric(nOf("4_board_int16"), miouOf("4_vs_1"),
                                  dropOf("4_vs_1"), cosAvg("4_vs_1"), e4));
 }
 
