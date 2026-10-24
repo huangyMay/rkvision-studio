@@ -29,6 +29,7 @@
 #include <QMediaPlayer>
 #include <QPainter>
 #include <QProcess>
+#include <QScrollArea>
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QUrl>
@@ -229,7 +230,16 @@ void MainWindow::buildUi() {
 
     auto *left = new QVBoxLayout;
     left->setSpacing(12);
-    body->addLayout(left, 0);
+    // 小屏/高缩放：左列内容超出窗口高度时出滚动条，不再挤压重叠
+    auto *leftScroll = new QScrollArea;
+    leftScroll->setWidgetResizable(true);
+    leftScroll->setFrameShape(QFrame::NoFrame);
+    leftScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *leftBody = new QWidget;
+    leftBody->setLayout(left);
+    leftScroll->setWidget(leftBody);
+    leftScroll->setFixedWidth(372);
+    body->addWidget(leftScroll, 0);
     body->setStretch(0, 0);
     body->setStretch(1, 1);
 

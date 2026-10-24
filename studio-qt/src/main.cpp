@@ -38,7 +38,7 @@ int main(int argc, char *argv[]) {
         app.setStyleSheet(QString::fromUtf8(qss.readAll()));
 
     MainWindow w;
-    w.show();
+    w.showMaximized();
 
     // 回归触发器（独立于截图模式；与 --screenshot 组合时可自动存盘退出）
     const int rtIdx = args.indexOf(QStringLiteral("--autortsp"));
