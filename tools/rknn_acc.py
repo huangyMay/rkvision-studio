@@ -43,6 +43,29 @@ def adb_path_prepend():
     os.environ["PATH"] = home_bin + os.pathsep + os.environ.get("PATH", "")
 
 
+def start_keepalive(device):
+    """网络设备（IP:端口）时启动保活守护线程：accuracy_analysis 内部 adb root
+    会重启 adbd、切断 TCP 传输，导致工具挂死；每 3s 重连+保 root 即可预防。"""
+    if ":" not in device:
+        return
+    import shutil
+    import threading
+    import subprocess
+    adb = shutil.which("adb")
+    if not adb:
+        return
+
+    def loop():
+        while True:
+            subprocess.run([adb, "connect", device],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run([adb, "root"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            threading.Event().wait(3)
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
 def parse_error_analysis(path):
     """error_analysis.txt → [{name, sim_entire_cos, sim_single_cos, rt_entire_cos, rt_single_cos}]。
     真实列序（2.3.2）：sim_entire(cos|euc) sim_single(cos|euc) runtime_entire(cos|euc) single_sim(cos|euc)。
@@ -86,6 +109,7 @@ def main():
     out_dir = norm_path(sys.argv[5]) if len(sys.argv) > 5 else "/tmp/rknn_acc_out"
 
     adb_path_prepend()
+    start_keepalive(device)
     mean, std = parse_meanstd(meanstd)
 
     from rknn.api import RKNN

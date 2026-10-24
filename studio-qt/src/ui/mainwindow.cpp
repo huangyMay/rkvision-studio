@@ -3,6 +3,7 @@
 #include "core/deployer.h"
 #include "core/mjpegclient.h"
 #include "core/boardmonitor.h"
+#include "core/boardacc.h"
 #include "core/boardperf.h"
 #include "core/inferstream.h"
 #include "core/onnxanalyzer.h"
@@ -28,6 +29,9 @@
 #include <QLineEdit>
 #include <QMediaPlayer>
 #include <QPainter>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QMessageBox>
 #include <QProcess>
 #include <QScrollArea>
 #include <QStackedWidget>
@@ -99,6 +103,43 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         showAnalysis(r);
     });
     m_rknn = new RknnSimRunner(this);
+    m_acc = new BoardAccRunner(this);
+    connect(m_acc, &BoardAccRunner::logLine, this, &MainWindow::appendLog);
+    connect(m_acc, &BoardAccRunner::finished, this, [this](bool ok, const QString &json,
+                                                           const QString &err) {
+        m_btnAcc->setEnabled(true);
+        if (!ok) {
+            appendLog(QStringLiteral("量化精度失败: %1").arg(err), "#ff6b6b");
+            QMessageBox::warning(this, QStringLiteral("量化精度"), err);
+            return;
+        }
+        // 解析 layers，产出 人读汇总表
+        const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+        const QJsonArray layers = doc.object().value("layers").toArray();
+        const QString outDir = doc.object().value("out_dir").toString();
+        QString table = QStringLiteral("层名                          sim_entire  sim_single  rt_entire  rt_single\n");
+        double minSingle = 2.0;
+        for (const QJsonValue &v : layers) {
+            const QJsonObject o = v.toObject();
+            const double ss = o.value("sim_single_cos").toDouble(1.0);
+            minSingle = qMin(minSingle, ss);
+            table += QStringLiteral("%1  %2  %3  %4  %5\n")
+                         .arg(o.value("name").toString(), -34)
+                         .arg(o.value("sim_entire_cos").toDouble(), 0, 'f', 5)
+                         .arg(o.value("sim_single_cos").toDouble(1.0), 0, 'f', 5)
+                         .arg(o.value("rt_entire_cos").toDouble(1.0), 0, 'f', 5)
+                         .arg(o.value("rt_single_cos").toDouble(1.0), 0, 'f', 5);
+        }
+        appendLog(QStringLiteral("量化精度完成: %1 层，最低 sim_single_cos=%2")
+                      .arg(layers.size())
+                      .arg(minSingle, 0, 'f', 5), "#3ecf72");
+        QMessageBox::information(this, QStringLiteral("量化精度分析（逐层余弦）"),
+                                 QStringLiteral("层数: %1   最低 sim_single_cos: %2\n"
+                                                "完整表: %3/error_analysis.txt\n\n%4")
+                                     .arg(layers.size())
+                                     .arg(minSingle, 0, 'f', 5)
+                                     .arg(outDir, table));
+    });
     connect(m_rknn, &RknnSimRunner::finished, this, [this](const OnnxResult &r) {
         m_btnRkSim->setEnabled(true);
         if (!r.ok) {
@@ -645,6 +686,15 @@ void MainWindow::buildUi() {
     m_btnBoardPerf = new QPushButton(QStringLiteral("📡 板端性能（NPU 真测，需板在线）"));
     rkL->addWidget(m_btnBoardPerf);
     connect(m_btnBoardPerf, &QPushButton::clicked, this, &MainWindow::onBoardPerf);
+    // 🎯 量化精度：ONNX→量化构建→真板逐层余弦（tools/rknn_acc.py，需网络 adb）
+    auto *accRow = new QHBoxLayout;
+    m_btnAcc = new QPushButton(QStringLiteral("🎯 量化精度（accuracy_analysis）"));
+    m_accDevice = new QLineEdit(QStringLiteral("192.168.0.96:5555"));
+    m_accDevice->setToolTip(QStringLiteral("板端网络 adb 地址（IP:端口；端口随无线调试开关变化）"));
+    accRow->addWidget(m_btnAcc, 1);
+    accRow->addWidget(m_accDevice, 1);
+    rkL->addLayout(accRow);
+    connect(m_btnAcc, &QPushButton::clicked, this, &MainWindow::onBoardAcc);
     rleft->addStretch();
 
     auto *rright = new QVBoxLayout;
@@ -1052,6 +1102,53 @@ void MainWindow::onBoardPerf() {
     const QString engineDir = resolveProjectsRoot() + QStringLiteral("/../build-board/engine");
     m_boardPerf->run(serial, rknn, image,
                      QStringLiteral("/data/local/tmp/rvs"), engineDir, 5);
+}
+
+void MainWindow::onBoardAcc() {
+    if (m_acc->running()) return;
+    const QString onnx = m_rkModelPath->text().trimmed();
+    if (onnx.isEmpty() || !QFileInfo::exists(onnx) || !onnx.endsWith(QStringLiteral(".onnx"), Qt::CaseInsensitive)) {
+        QMessageBox::warning(this, QStringLiteral("量化精度"),
+                             QStringLiteral("请先在上方选择有效的 .onnx 模型（accuracy_analysis 从 ONNX 量化构建）"));
+        return;
+    }
+    const QString image = m_rkImagePath->text().trimmed();
+    if (image.isEmpty() || !QFileInfo::exists(image)) {
+        QMessageBox::warning(this, QStringLiteral("量化精度"),
+                             QStringLiteral("请先在上方选择一张校准图片（数据闭环：正式量化建议 50~200 张）"));
+        return;
+    }
+    const QString device = m_accDevice->text().trimmed();
+    if (device.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("量化精度"), QStringLiteral("请填写板端网络 adb 地址（IP:端口）"));
+        return;
+    }
+    // dataset.txt：校准图列表（当前=所选一张图；多图时每行一张）
+    const QString dsLocal = QDir::temp().filePath(QStringLiteral("rvs_acc_dataset.txt"));
+    {
+        QFile ds(dsLocal);
+        if (!ds.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QMessageBox::warning(this, QStringLiteral("量化精度"), QStringLiteral("无法写 dataset.txt"));
+            return;
+        }
+        ds.write((OnnxRunner::toWslPath(image) + QStringLiteral("\n")).toUtf8());
+    }
+    QString meanstd = m_rkMeanStd->text().trimmed();
+    if (meanstd.isEmpty() || meanstd.contains(QStringLiteral("none")))
+        meanstd = QStringLiteral("0,0,0/255,255,255");
+    meanstd.replace(QLatin1Char('|'), QLatin1Char('/'));
+    const QString outDir = QDir::temp().filePath(QStringLiteral("rknn_acc_out"));
+
+    m_btnAcc->setEnabled(false);
+    appendLog(QStringLiteral("量化精度: %1 @ %2（量化构建+逐层推理，数分钟）")
+                  .arg(QFileInfo(onnx).fileName(), device), "#8b97a8");
+    m_acc->start(QStringLiteral("Ubuntu-22.04"),
+                 OnnxRunner::toWslPath(QString::fromUtf8(RVS_TOOLS_DIR) +
+                                       QStringLiteral("/rknn_acc.py")),
+                 OnnxRunner::toWslPath(onnx),
+                 OnnxRunner::toWslPath(dsLocal),
+                 device, meanstd,
+                 QStringLiteral("/tmp/rknn_acc_out"));
 }
 
 void MainWindow::onNetronView() {

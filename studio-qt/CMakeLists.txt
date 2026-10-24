@@ -20,6 +20,7 @@ add_executable(rvs_studio
     src/core/rknnsimrunner.cpp
     src/core/boardperf.cpp
     src/core/boardmonitor.cpp
+    src/core/boardacc.cpp
     src/core/inferstream.cpp
     src/model/pipelinespec.cpp
     src/model/workflowgen.cpp
@@ -36,12 +37,27 @@ target_link_libraries(rvs_studio PRIVATE
 set(RVS_WSL_DISTRO "Ubuntu-22.04" CACHE STRING "wsl.exe -d 使用的发行版名")
 # 本工程以 -S studio-qt 独立配置，CMAKE_SOURCE_DIR 即 studio-qt/；脚本在仓库根 tools/
 cmake_path(SET RVS_TOOLS_DIR NORMALIZE "${CMAKE_SOURCE_DIR}/../tools")
+cmake_path(SET RVS_PROJECTS_ROOT NORMALIZE "${CMAKE_SOURCE_DIR}/../projects")
 target_compile_definitions(rvs_studio PRIVATE
-    PROJECTS_ROOT="${CMAKE_SOURCE_DIR}/projects"
+    PROJECTS_ROOT="${RVS_PROJECTS_ROOT}"
     RVS_TOOLS_DIR="${RVS_TOOLS_DIR}"
     RVS_WSL_DISTRO="${RVS_WSL_DISTRO}")
 
 set_target_properties(rvs_studio PROPERTIES WIN32_EXECUTABLE ON)
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     target_link_options(rvs_studio PRIVATE -s)
+endif()
+
+# ---- model 层纯逻辑测试（不需要 Widgets / 不连板）----
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(test_workflowgen
+        tests/test_workflowgen.cpp
+        src/model/workflowgen.cpp
+        src/model/pipelinespec.cpp)
+    target_include_directories(test_workflowgen PRIVATE src)
+    target_link_libraries(test_workflowgen PRIVATE Qt6::Core)
+    target_compile_definitions(test_workflowgen PRIVATE
+        RVS_GOLDEN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/workflowgen_golden.json")
+    add_test(NAME test_workflowgen COMMAND test_workflowgen)
 endif()

@@ -11,6 +11,7 @@ class OnnxAnalyzer;
 class OnnxRunner;
 class PreviewWidget;
 class RknnSimRunner;
+class BoardAccRunner;
 class WorkflowPage;
 class QCheckBox;
 class QComboBox;
@@ -44,6 +45,7 @@ private slots:
     void onNetronView();
     void onRknnSim();
     void onBoardPerf();
+    void onBoardAcc();
     void appendLog(const QString &msg, const QString &color = {});
 
 public slots:
@@ -110,6 +112,9 @@ private:
     QDoubleSpinBox *m_rkIouSpin = nullptr;
     QPushButton *m_btnRkSim = nullptr;
     QPushButton *m_btnBoardPerf = nullptr;     // 📡 板端 NPU 性能
+    QPushButton *m_btnAcc = nullptr;           // 🎯 量化精度（accuracy_analysis）
+    QLineEdit *m_accDevice = nullptr;          // 网络 adb 地址（IP:端口）
+    BoardAccRunner *m_acc = nullptr;
     RknnSimRunner *m_rknn = nullptr;
     BoardPerfRunner *m_boardPerf = nullptr;
     PreviewWidget *m_rkPreview = nullptr;
