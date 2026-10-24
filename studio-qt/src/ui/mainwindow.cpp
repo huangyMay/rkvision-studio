@@ -210,8 +210,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         if (st4.contains("n")) {
             body += line(QStringLiteral("④ 板上 int8"), st4.value("n").toInt(),
                          miouOf("4_vs_1"), dropOf("4_vs_1"), cosAvg("4_vs_1"));
+        } else if (st4.contains("error")) {
+            body += QStringLiteral("④ 板上 int8  —— 连接失败（查设备地址/rknn_server）\n");
         } else {
-            body += QStringLiteral("④ 板上 int8  —— 板离线，跳过\n");
+            body += QStringLiteral("④ 板上 int8  —— 设备地址为空，跳过\n");
         }
         appendLog(QStringLiteral("四级对比完成——结果见「📊 对比视图」子页"), "#3ecf72");
 
@@ -877,7 +879,7 @@ void MainWindow::buildUi() {
     // 🎯 量化精度：ONNX→量化构建→真板逐层余弦（tools/rknn_acc.py，需网络 adb）
     auto *accRow = new QHBoxLayout;
     m_btnAcc = new QPushButton(QStringLiteral("🎯 量化精度（accuracy_analysis）"));
-    m_accDevice = new QLineEdit(QStringLiteral("192.168.0.96:5555"));
+    m_accDevice = new QLineEdit(QStringLiteral("192.168.3.163:5555"));
     m_accDevice->setToolTip(QStringLiteral("板端网络 adb 地址（IP:端口；端口随无线调试开关变化）"));
     accRow->addWidget(m_btnAcc, 1);
     accRow->addWidget(m_accDevice, 1);
@@ -1392,6 +1394,9 @@ void MainWindow::onAccCompare() {
     m_btnCompare->setEnabled(false);
     appendLog(QStringLiteral("精度对比: %1（四级漏斗，约 3~6 分钟）")
                   .arg(QFileInfo(onnx).fileName()), "#8b97a8");
+    // dump 目录给 Windows 路径：WSL python 经 /mnt/c 写入（norm_path 自动转），
+    // Qt 直接用原路径读——同一物理目录，两侧一致
+    const QString dumpWin = QDir::temp().filePath(QStringLiteral("acc_dump"));
     m_compare->start(QStringLiteral("Ubuntu-22.04"),
                      OnnxRunner::toWslPath(QString::fromUtf8(RVS_TOOLS_DIR) +
                                            QStringLiteral("/acc_compare.py")),
@@ -1399,7 +1404,7 @@ void MainWindow::onAccCompare() {
                      OnnxRunner::toWslPath(image),
                      device, meanstd,
                      OnnxRunner::toWslPath(dsLocal),
-                     OnnxRunner::toWslPath(QDir::temp().filePath(QStringLiteral("acc_dump"))));
+                     dumpWin);
 }
 
 // 对比视图双表：layers 来自 rknn_acc（sim_*  填左表，rt_* 填右表），低余弦标红
