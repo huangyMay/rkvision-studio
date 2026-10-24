@@ -241,34 +241,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                     QStringLiteral("int8 模拟逐层（板离线，无真板数据）"));
             }
         }
-        auto fillTable = [&](QTableWidget *t, bool runtimeSide) {
-            t->setRowCount(0);
-            int row = 0;
-            for (const QJsonValue &v : layers) {
-                const QJsonObject o2 = v.toObject();
-                const double ent = runtimeSide ? o2.value("rt_entire_cos").toDouble(-1)
-                                               : o2.value("sim_entire_cos").toDouble(-1);
-                const double sgl = runtimeSide ? o2.value("rt_single_cos").toDouble(-1)
-                                               : o2.value("sim_single_cos").toDouble(-1);
-                if (ent < 0 && sgl < 0) continue;         // 该层无对应侧数据
-                t->insertRow(row);
-                const QString name = o2.value("name").toString();
-                auto mk = [](double val) {
-                    auto *it = new QTableWidgetItem(val > 0 ? QString::number(val, 'f', 5)
-                                                            : QStringLiteral("—"));
-                    if (val > 0 && val < 0.99)
-                        it->setForeground(QColor(0xff, 0x6b, 0x6b));   // 低于验收线标红
-                    return it;
-                };
-                t->setItem(row, 0, new QTableWidgetItem(name));
-                t->setItem(row, 1, mk(ent));
-                t->setItem(row, 2, mk(sgl));
-                ++row;
-            }
-            t->resizeColumnsToContents();
-        };
-        fillTable(m_cmpSimTable, false);
-        fillTable(m_cmpRtTable, true);
+        if (!layers.isEmpty()) {
+            fillLayerTables(layers);                  // 双表（sim|runtime），低余弦标红
+        } else {
+            // acc_compare 的报告无逐层数据——提示去点 🎯（rknn_acc）填充双表
+            m_cmpRightTitle->setText(QStringLiteral(
+                "int8 模拟逐层（点「🎯量化精度」后填充；⚖️ 不产逐层数据）"));
+        }
         m_labStack->setCurrentIndex(2);           // 跑完自动切到对比视图
         m_segCompare->setChecked(true);
     });
@@ -302,28 +281,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         appendLog(QStringLiteral("量化精度完成: %1 层，最低 sim_single_cos=%2")
                       .arg(layers.size())
                       .arg(minSingle, 0, 'f', 5), "#3ecf72");
-        // 可滚动可拖放的表格对话框（QMessageBox 装不下长表且无滚动条）
-        QDialog dlg(this);
-        dlg.setWindowTitle(QStringLiteral("量化精度分析（逐层余弦）— %1 层，最低 sim_single %2")
-                               .arg(layers.size())
-                               .arg(minSingle, 0, 'f', 5));
-        dlg.resize(1000, 720);
-        auto *v = new QVBoxLayout(&dlg);
-        auto *sum = new QLabel(QStringLiteral(
-            "层数 <b>%1</b> · 最低 sim_single_cos <b>%2</b> · 逐层明细 %3/error_analysis.txt")
-            .arg(layers.size())
-            .arg(minSingle, 0, 'f', 5)
-            .arg(outDir.toHtmlEscaped()));
-        sum->setWordWrap(true);
-        v->addWidget(sum);
-        auto *te = new QTextEdit;
-        te->setReadOnly(true);
-        te->setPlainText(table);
-        QFont mono(QStringLiteral("Consolas"));
-        mono.setStyleHint(QFont::Monospace);
-        te->setFont(mono);
-        v->addWidget(te, 1);
-        dlg.exec();
+        // 填充「📊 对比视图」双表（runtime 数据源）并切过去；明细文件仍可用
+        fillLayerTables(layers);
+        m_cmpRightTitle->setText(QStringLiteral(
+            "板端逐层（runtime_error）— %1 层 · 最低 %2").arg(layers.size())
+            .arg(minSingle, 0, 'f', 5));
+        m_views->setCurrentIndex(1);
+        m_navLab->setChecked(true);
+        m_labStack->setCurrentIndex(2);
+        m_segCompare->setChecked(true);
+        appendLog(QStringLiteral("逐层明细文件: %1/error_analysis.txt").arg(outDir), "#8b97a8");
     });
     connect(m_rknn, &RknnSimRunner::finished, this, [this](const OnnxResult &r) {
         m_btnRkSim->setEnabled(true);
@@ -1433,6 +1400,38 @@ void MainWindow::onAccCompare() {
                      device, meanstd,
                      OnnxRunner::toWslPath(dsLocal),
                      OnnxRunner::toWslPath(QDir::temp().filePath(QStringLiteral("acc_dump"))));
+}
+
+// 对比视图双表：layers 来自 rknn_acc（sim_*  填左表，rt_* 填右表），低余弦标红
+void MainWindow::fillLayerTables(const QJsonArray &layers) {
+    auto fill = [](QTableWidget *t, const QString &entKey, const QString &sglKey,
+                   const QJsonArray &arr) {
+        t->setRowCount(0);
+        int row = 0;
+        for (const QJsonValue &v : arr) {
+            const QJsonObject o = v.toObject();
+            const double ent = o.value(entKey).toDouble(-1);
+            const double sgl = o.value(sglKey).toDouble(-1);
+            if (ent < 0 && sgl < 0) continue;
+            t->insertRow(row);
+            auto mk = [](double val) {
+                auto *it = new QTableWidgetItem(val > 0 ? QString::number(val, 'f', 5)
+                                                        : QStringLiteral("—"));
+                if (val > 0 && val < 0.99)
+                    it->setForeground(QColor(0xff, 0x6b, 0x6b));   // 低于验收线标红
+                return it;
+            };
+            t->setItem(row, 0, new QTableWidgetItem(o.value("name").toString()));
+            t->setItem(row, 1, mk(ent));
+            t->setItem(row, 2, mk(sgl));
+            ++row;
+        }
+        t->resizeColumnsToContents();
+    };
+    fill(m_cmpSimTable, QStringLiteral("sim_entire_cos"),
+         QStringLiteral("sim_single_cos"), layers);
+    fill(m_cmpRtTable, QStringLiteral("rt_entire_cos"),
+         QStringLiteral("rt_single_cos"), layers);
 }
 
 void MainWindow::onBoardAcc() {

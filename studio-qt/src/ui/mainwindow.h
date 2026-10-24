@@ -51,6 +51,7 @@ private slots:
     void onBoardPerf();
     void onBoardAcc();
     void onAccCompare();
+    void fillLayerTables(const QJsonArray &layers);   // 填充对比视图双表（sim|runtime）
     void appendLog(const QString &msg, const QString &color = {});
 
 public slots:
