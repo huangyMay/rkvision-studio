@@ -15,6 +15,7 @@ void AccCompareRunner::start(const QString &distro, const QString &scriptWsl,
                              const QString &datasetWsl, const QString &dumpDir) {
     stop();
     m_out.clear();
+    m_finalJson.clear();
     m_proc = new QProcess(this);
     m_proc->setProgram(QStringLiteral("wsl.exe"));
     QStringList args{QStringLiteral("-d"), distro, QStringLiteral("--"),
@@ -38,14 +39,19 @@ void AccCompareRunner::start(const QString &distro, const QString &scriptWsl,
                 emit stageUpdate(t.mid(6));
             else if (t.startsWith(QStringLiteral("LAYERS ")))
                 emit layersUpdate(t.mid(7));
+            else if (t.startsWith(QStringLiteral("{\"ok\"")))
+                m_finalJson = t;                  // 最终报告行（finished 用）
         }
     });
     connect(m_proc, &QProcess::finished, this,
             [this](int, QProcess::ExitStatus) {
-        QString json, err;
-        const QStringList lines = m_out.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-        for (const QString &l : lines) {
-            const QString t = l.trimmed();
+        // 最终 JSON 在 readyRead 里已捕获（流式消费模式下 m_out 只剩半行）
+        QString err;
+        QString json = m_finalJson;
+        // 半行兜底：final JSON 可能与后续输出粘连在 m_out 尾部
+        if (json.isEmpty() && m_out.contains(QStringLiteral("{\"ok\""))) {
+            const int i = m_out.indexOf(QStringLiteral("{\"ok\""));
+            const QString t = m_out.mid(i).trimmed();
             if (t.startsWith(QStringLiteral("{\"ok\""))) json = t;
         }
         bool ok = !json.isEmpty() && json.contains(QStringLiteral("\"ok\": true"));

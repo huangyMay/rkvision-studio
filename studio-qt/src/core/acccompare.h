@@ -29,5 +29,6 @@ signals:
 
 private:
     QProcess *m_proc = nullptr;
-    QString m_out;
+    QString m_out;                             // 半行缓冲（流式解析）
+    QString m_finalJson;                       // 最终报告 JSON（readyRead 捕获）
 };
