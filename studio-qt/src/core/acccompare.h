@@ -26,6 +26,8 @@ signals:
     void stageUpdate(const QString &json);
     // 流式：逐层余弦就绪（accuracy_analysis 完成）
     void layersUpdate(const QString &layersJson);
+    // 流式：操作流文本（模型识别/转换/推理进度，信息面板显示）
+    void flowLog(const QString &msg);
 
 private:
     QProcess *m_proc = nullptr;

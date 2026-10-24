@@ -126,6 +126,40 @@ def main():
     mean, std = parse_meanstd(meanstd)          # 已是 config 格式 [[...]]；"none" → None
     t_all = time.time()
 
+    def log(msg):
+        print("LOG " + msg, flush=True)
+
+    # 信息面板首行：模型家族自动识别（yolov8 头=model.22，yolov5 头=model.24）
+    import onnx as onnx_lib
+    _m = onnx_lib.load(onnx_path)
+    _names = " ".join(n.name for n in _m.graph.node)
+    if "/model.22/" in _names or "model.22" in _names:
+        family = "YOLOv8"
+    elif "/model.24/" in _names or "model.24" in _names:
+        family = "YOLOv5"
+    else:
+        family = "通用"
+    log(f"识别到 {family} 模型: {os.path.basename(onnx_path)}")
+
+    # 网络设备：保活从第一刻开始（否则跑中途 adbd 断连全盘皆输）
+    if device:
+        try:
+            from rknn_acc import start_keepalive
+            start_keepalive(device)
+            log(f"板端连接: {device}（保活已启动）")
+        except Exception:
+            pass
+
+    # dataset 自愈：缺失/失效时用输入图自动生成（不再依赖 /tmp 遗留文件）
+    if dataset and not os.path.exists(dataset):
+        log(f"校准集 {dataset} 不存在——用输入图自动生成")
+        dataset = None
+    if not dataset and dump_dir:
+        dataset = os.path.join(dump_dir, "dataset_auto.txt")
+        with open(dataset, "w", encoding="utf-8") as f:
+            f.write(image_path + "\n")
+        log(f"已自动生成校准集（1 张输入图）: {dataset}")
+
     import onnxruntime as ort
     img = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if img is None:
@@ -189,75 +223,105 @@ def main():
         return cos
 
     # ① ONNX 金标准
+    log("① 开始 ONNX 基线推理（onnxruntime float32）…")
     t0 = time.time()
     outs1 = run_onnx(onnx_path, blob, input_size, scale, left, top, conf_th, iou_th)
     d1, _ = decode(outs1, input_size, scale, left, top, conf_th, iou_th)
     report["stages"]["1_onnx"] = {"ms": round((time.time() - t0) * 1000, 1),
                                   "n": len(d1) if d1 else 0}
     base = [[d[0], d[1], d[2], d[3], d[4], d[5]] for d in (d1 or [])]
+    log(f"① ONNX 基线完成: 基准检出 {len(base)} 框")
     emit_stage("1_onnx", {"image": stage_image("onnx_result.jpg",
                                                draw(img, d1, (0, 255, 0), "onnx"))})
 
-    # ② RKNN FP16 模拟
+    # ② 板上 FP16（build fp16 → 真板推理；转换损失在板上实测）
+    d2 = None
+    if device:
+        log("② 开始 FP16 转换（build do_quantization=False）…")
+        t0 = time.time()
+        try:
+            rk_b16 = build_rknn(onnx_path, False, None, mean, std)
+            log("② FP16 转换完成，开始板上推理…")
+            o2, d2, _ = rknn_infer_decode(rk_b16, nhwc, input_size, scale, left, top,
+                                          conf_th, iou_th, target="rk3576", device=device)
+            report["stages"]["2_board_fp16"] = {"ms": round((time.time() - t0) * 1000, 1),
+                                                "n": len(d2) if d2 else 0}
+            report["tensor_cosine"]["2_vs_1"] = tensor_cosine(outs1, o2)
+            b2 = [[d[0], d[1], d[2], d[3], d[4]] for d in (d2 or [])]
+            report["match"]["2_vs_1"] = match_report(base, b2, "板上FP16 vs ONNX")
+            log(f"② 板上 FP16 完成: 检出 {len(b2)} 框 · mean IoU "
+                f"{report['match']['2_vs_1'].get('mean_iou', 0)}")
+            emit_stage("2_board_fp16", {"image": stage_image(
+                "board_fp16_result.jpg", draw(img, d2, (128, 0, 255), "bd_fp16"))})
+            try:
+                rk_b16.release()
+            except Exception:
+                pass
+        except Exception as e:  # noqa: BLE001
+            report["stages"]["2_board_fp16"] = {"error": str(e)[:200]}
+            report["match"]["2_vs_1"] = {"label": "板上FP16", "error": str(e)[:200]}
+            log(f"② 板上 FP16 失败: {str(e)[:120]}")
+            emit_stage("2_board_fp16")
+
+    # ③ FP16 模拟（参考：对照 ② 可分离"板端实现差异"）
+    log("③ 开始 FP16 模拟推理（x86 simulator，参考对照）…")
     t0 = time.time()
-    rk_fp16 = build_rknn(onnx_path, False, None, mean, std)
-    o2, d2, _ = rknn_infer_decode(rk_fp16, nhwc, input_size, scale, left, top, conf_th, iou_th)
-    report["stages"]["2_fp16_sim"] = {"ms": round((time.time() - t0) * 1000, 1),
-                                      "n": len(d2) if d2 else 0}
-    report["tensor_cosine"]["2_vs_1"] = tensor_cosine(outs1, o2)
-    b2 = [[d[0], d[1], d[2], d[3], d[4]] for d in (d2 or [])]
-    report["match"]["2_vs_1"] = match_report(base, b2, "FP16模拟 vs ONNX")
-    emit_stage("2_fp16_sim", {"image": stage_image("fp16_result.jpg",
-                                                   draw(img, d2, (128, 0, 255), "fp16"))})
+    rk_f16s = build_rknn(onnx_path, False, None, mean, std)
+    o3, d3, _ = rknn_infer_decode(rk_f16s, nhwc, input_size, scale, left, top, conf_th, iou_th)
+    report["stages"]["3_fp16_sim"] = {"ms": round((time.time() - t0) * 1000, 1),
+                                      "n": len(d3) if d3 else 0}
+    report["tensor_cosine"]["3_vs_1"] = tensor_cosine(outs1, o3)
+    b3 = [[d[0], d[1], d[2], d[3], d[4]] for d in (d3 or [])]
+    report["match"]["3_vs_1"] = match_report(base, b3, "FP16模拟 vs ONNX")
+    log(f"③ FP16 模拟完成: 检出 {len(b3)} 框")
+    emit_stage("3_fp16_sim", {"image": stage_image("fp16sim_result.jpg",
+                                                   draw(img, d3, (128, 0, 255), "f16sim"))})
     try:
-        rk_fp16.release()
+        rk_f16s.release()
     except Exception:
         pass
 
-    # ③ RKNN int8 模拟（量化构建）
+    # ④ 板上 int8（量化构建 → 真板推理；量化损失在板上实测）
+    d4 = None
+    rk_i8 = None
     if not dataset:
         print(json.dumps({"ok": False,
-                          "error": "③ int8 需要校准集 dataset.txt（每行一张图），或用 ③只测 fp16"}))
+                          "error": "④ int8 需要校准集 dataset.txt（每行一张图）"}))
         return
-    t0 = time.time()
-    rk_i8 = build_rknn(onnx_path, True, dataset, mean, std)
-    report["stages"]["3_int8_sim"] = {"ms": round((time.time() - t0) * 1000, 1)}
-    o3, d3, _ = rknn_infer_decode(rk_i8, nhwc, input_size, scale, left, top, conf_th, iou_th)
-    report["stages"]["3_int8_sim"]["n"] = len(d3) if d3 else 0
-    report["tensor_cosine"]["3_vs_1"] = tensor_cosine(outs1, o3)
-    b3 = [[d[0], d[1], d[2], d[3], d[4]] for d in (d3 or [])]
-    report["match"]["3_vs_1"] = match_report(base, b3, "int8模拟 vs ONNX")
-    emit_stage("3_int8_sim", {"image": stage_image("int8sim_result.jpg",
-                                                   draw(img, d3, (255, 128, 0), "i8sim"))})
-
-    # ④ 板上 int8（同一 int8 模型，切真板 runtime）
-    d4 = None
     if device:
+        log("④ 开始 int8 量化转换（build do_quantization=True + 校准集）…")
         t0 = time.time()
         try:
-            from rknn_acc import start_keepalive
-            start_keepalive(device)
-        except Exception:
-            pass
-        try:
+            rk_i8 = build_rknn(onnx_path, True, dataset, mean, std)
+            log("④ int8 转换完成，开始板上推理…")
             o4, d4, _ = rknn_infer_decode(rk_i8, nhwc, input_size, scale, left, top,
                                           conf_th, iou_th, target="rk3576", device=device)
-            report["stages"]["4_board"] = {"ms": round((time.time() - t0) * 1000, 1),
-                                           "n": len(d4) if d4 else 0}
+            report["stages"]["4_board_int8"] = {"ms": round((time.time() - t0) * 1000, 1),
+                                                "n": len(d4) if d4 else 0}
             report["tensor_cosine"]["4_vs_1"] = tensor_cosine(outs1, o4)
             b4 = [[d[0], d[1], d[2], d[3], d[4]] for d in (d4 or [])]
             report["match"]["4_vs_1"] = match_report(base, b4, "板上int8 vs ONNX")
-            emit_stage("4_board", {"image": stage_image("board_result.jpg",
-                                                        draw(img, d4, (0, 128, 255), "board"))})
+            log(f"④ 板上 int8 完成: 检出 {len(b4)} 框 · mean IoU "
+                f"{report['match']['4_vs_1'].get('mean_iou', 0)}")
+            emit_stage("4_board_int8", {"image": stage_image("board_result.jpg",
+                                                             draw(img, d4, (0, 128, 255), "board"))})
         except Exception as e:  # noqa: BLE001
-            report["stages"]["4_board"] = {"error": str(e)[:200]}
+            report["stages"]["4_board_int8"] = {"error": str(e)[:200]}
             report["match"]["4_vs_1"] = {"label": "板上int8", "error": str(e)[:200]}
-            emit_stage("4_board")
+            log(f"④ 板上 int8 失败: {str(e)[:120]}")
+            emit_stage("4_board_int8")
 
-    # 逐层精度（复用 ③ 的 int8 RKNN 对象直接 accuracy_analysis——不重新构建）。
+    # 逐层精度（复用 ④ 的 int8 RKNN 对象直接 accuracy_analysis——不重新构建）。
     # 板可达 → sim+runtime 双列；板失败 → 回退 target=None（仅 simulator 列，仍可定位量化敏感层）
     if dump_dir:
         layers = []
+        if rk_i8 is None:                             # 板离线时 ④ 未建 int8，此处补建
+            log("④ 补建 int8 模型（accuracy_analysis 用）…")
+            try:
+                rk_i8 = build_rknn(onnx_path, True, dataset, mean, std)
+            except Exception as e:  # noqa: BLE001
+                report["layers_error"] = f"int8 补建失败: {str(e)[:150]}"
+                rk_i8 = None
         from rknn_acc import parse_error_analysis
         acc_dir = os.path.join(dump_dir, "acc")
         inputs = [image_path]
@@ -287,8 +351,9 @@ def main():
     # detections 留档（画面已在各阶段即时落盘）
     if dump_dir:
         json.dump({"1_onnx": [list(map(float, d)) for d in (d1 or [])],
-                   "3_int8_sim": [list(map(float, d)) for d in (d3 or [])],
-                   "4_board": [list(map(float, d)) for d in (d4 or [])]},
+                   "2_board_fp16": [list(map(float, d)) for d in (d2 or [])],
+                   "3_fp16_sim": [list(map(float, d)) for d in (d3 or [])],
+                   "4_board_int8": [list(map(float, d)) for d in (d4 or [])]},
                   open(os.path.join(dump_dir, "detections.json"), "w"))
         report["dump_dir"] = dump_dir
 

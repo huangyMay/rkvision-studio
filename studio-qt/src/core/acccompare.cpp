@@ -39,6 +39,8 @@ void AccCompareRunner::start(const QString &distro, const QString &scriptWsl,
                 emit stageUpdate(t.mid(6));
             else if (t.startsWith(QStringLiteral("LAYERS ")))
                 emit layersUpdate(t.mid(7));
+            else if (t.startsWith(QStringLiteral("LOG ")))
+                emit flowLog(t.mid(4));
             else if (t.startsWith(QStringLiteral("{\"ok\"")))
                 m_finalJson = t;                  // 最终报告行（finished 用）
         }

@@ -114,15 +114,17 @@ private:
     QPushButton *m_segSim = nullptr;           // 实验室内部段：模拟量化
     PreviewWidget *m_cmpLocalPreview = nullptr;   // 对比视图：本地 ONNX 结果图（遗留）
     PreviewWidget *m_cmpBoardPreview = nullptr;   // 对比视图：板上结果图（遗留）
-    PreviewWidget *m_imgOnnx = nullptr;           // 图片面板：① ONNX
-    PreviewWidget *m_imgFp16 = nullptr;           // 图片面板：② FP16 模拟
-    PreviewWidget *m_imgInt8 = nullptr;           // 图片面板：③ int8 模拟
-    PreviewWidget *m_imgBoard = nullptr;          // 图片面板：④ 板上 int8
-    QStackedWidget *m_cmpViewStack = nullptr;     // 对比面板：0=图片面板 1=数据面板
+    PreviewWidget *m_imgOnnx = nullptr;           // 图片面板：① ONNX 基线
+    PreviewWidget *m_imgBoard = nullptr;          // 图片面板：③ 板上 int8
+    PreviewWidget *m_imgFp16 = nullptr;           // 图片面板：② 板上 FP16
+    PreviewWidget *m_imgFp16Sim = nullptr;        // 图片面板：④ FP16 模拟（参考）
+    QStackedWidget *m_cmpViewStack = nullptr;     // 对比面板：0=信息面板 1=图片面板 2=数据面板
+    QTextEdit *m_cmpLog = nullptr;                // 信息面板：操作流日志
     QLabel *m_metricOnnx = nullptr;               // 数据面板四栏指标
-    QLabel *m_metricFp16 = nullptr;
-    QLabel *m_metricInt8 = nullptr;
-    QLabel *m_metricBoard = nullptr;
+    QLabel *m_metricFp16 = nullptr;               // ② 板上 FP16
+    QLabel *m_metricFp16Sim = nullptr;            // ③ FP16 模拟（参考）
+    QLabel *m_metricInt8 = nullptr;               // ④ 板上 int8
+    QLabel *m_metricBoard = nullptr;              // （沿用成员名；与 m_metricInt8 同值）
     QTableWidget *m_cmpSimTable = nullptr;     // 对比视图：模拟器逐层
     QTableWidget *m_cmpRtTable = nullptr;      // 对比视图：板端逐层
     QLabel *m_cmpRightTitle = nullptr;

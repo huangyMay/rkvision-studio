@@ -161,6 +161,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_rknn = new RknnSimRunner(this);
     m_compare = new AccCompareRunner(this);
     connect(m_compare, &AccCompareRunner::logLine, this, &MainWindow::appendLog);
+    connect(m_compare, &AccCompareRunner::flowLog, this, [this](const QString &msg) {
+        const QString ts = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss"));
+        m_cmpLog->append(QStringLiteral("<span style='color:#5a6a80'>%1</span> %2").arg(ts, msg.toHtmlEscaped()));
+    });
     // 流式：每级完成即时刷新摘要与画面（不等全跑完）
     connect(m_compare, &AccCompareRunner::stageUpdate, this, [this](const QString &json) {
         const QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
@@ -174,11 +178,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                 p = QStringLiteral("//wsl.localhost/Ubuntu-22.04") + p;
             const QImage im(p);
             if (!im.isNull()) {
-                PreviewWidget *dst = m_imgInt8;
+                PreviewWidget *dst = m_imgFp16Sim;
                 const QString st = o.value("stage").toString();
                 if (st == QStringLiteral("1_onnx")) dst = m_imgOnnx;
-                else if (st == QStringLiteral("2_fp16_sim")) dst = m_imgFp16;
-                else if (st == QStringLiteral("4_board")) dst = m_imgBoard;
+                else if (st == QStringLiteral("2_board_fp16")) dst = m_imgFp16;
+                else if (st == QStringLiteral("4_board_int8")) dst = m_imgBoard;
                 dst->setImage(im);
             }
         }
@@ -869,9 +873,22 @@ void MainWindow::buildUi() {
     m_cmpSummary->setWordWrap(true);
     cvLayout->addWidget(m_cmpSummary);
 
-    // 面板切换：🖼 图片面板（默认 2×2 四图） / 📊 数据面板（四栏精度+逐层表）
+    // 面板切换：📋 信息面板（默认，操作流+结果） / 🖼 图片面板（2×2 四图） / 📊 数据面板（四栏+逐层）
     m_cmpViewStack = new QStackedWidget;
     cvLayout->addWidget(m_cmpViewStack, 1);
+
+    // 视图 0：信息面板（操作流日志 + 摘要，默认显示）
+    auto *infoPanel = new QWidget;
+    auto *iv = new QVBoxLayout(infoPanel);
+    iv->setContentsMargins(0, 0, 0, 0);
+    iv->setSpacing(6);
+    m_cmpLog = new QTextEdit;
+    m_cmpLog->setReadOnly(true);
+    m_cmpLog->setFont(QFont(QStringLiteral("Consolas")));
+    m_cmpLog->setPlaceholderText(QStringLiteral(
+        "操作流将在此实时显示：识别模型 → FP16/int8 转换 → 四级推理 → 检出结果…"));
+    iv->addWidget(m_cmpLog, 1);
+    m_cmpViewStack->addWidget(infoPanel);             // m_cmpViewStack index 0
 
     // 视图 0：图片面板（2×2）
     auto *imgPanel = new QWidget;
@@ -892,12 +909,12 @@ void MainWindow::buildUi() {
     mkCell(imgGrid, &m_imgOnnx, QStringLiteral("点 ⚖️ 后生成"), 0, 0,
            QStringLiteral("① ONNX 基线（本地）"));
     mkCell(imgGrid, &m_imgBoard, QStringLiteral("板离线/未跑"), 0, 1,
-           QStringLiteral("④ 板上 int8"));
+           QStringLiteral("③ 板上 int8"));
     mkCell(imgGrid, &m_imgFp16, QStringLiteral("板离线/未跑"), 1, 0,
-           QStringLiteral("② FP16 模拟"));
-    mkCell(imgGrid, &m_imgInt8, QStringLiteral("点 ⚖️ 后生成"), 1, 1,
-           QStringLiteral("③ int8 模拟"));
-    m_cmpViewStack->addWidget(imgPanel);              // m_cmpViewStack index 0
+           QStringLiteral("② 板上 FP16"));
+    mkCell(imgGrid, &m_imgFp16Sim, QStringLiteral("自动生成"), 1, 1,
+           QStringLiteral("④ FP16 模拟（参考）"));
+    m_cmpViewStack->addWidget(imgPanel);              // m_cmpViewStack index 1
 
     // 视图 1：数据面板（四栏指标 + 逐层双表）
     auto *dataPanel = new QWidget;
@@ -918,9 +935,9 @@ void MainWindow::buildUi() {
         metricRow->addLayout(col, 1);
     };
     mkMetric(&m_metricOnnx, QStringLiteral("① ONNX 基线"));
-    mkMetric(&m_metricFp16, QStringLiteral("② FP16 模拟"));
-    mkMetric(&m_metricInt8, QStringLiteral("③ int8 模拟"));
-    mkMetric(&m_metricBoard, QStringLiteral("④ 板上 int8"));
+    mkMetric(&m_metricFp16, QStringLiteral("② 板上 FP16"));
+    mkMetric(&m_metricFp16Sim, QStringLiteral("③ FP16 模拟"));
+    mkMetric(&m_metricInt8, QStringLiteral("④ 板上 int8"));
     dv->addLayout(metricRow);
     auto *tablesRow = new QHBoxLayout;
     tablesRow->setSpacing(6);
@@ -938,21 +955,25 @@ void MainWindow::buildUi() {
     tablesRow->addLayout(leftCol, 1);
     tablesRow->addLayout(rightCol, 1);
     dv->addLayout(tablesRow, 1);
-    m_cmpViewStack->addWidget(dataPanel);             // m_cmpViewStack index 1
+    m_cmpViewStack->addWidget(dataPanel);             // m_cmpViewStack index 2
 
     // 切换行 + 导出
     auto *cvTail = new QHBoxLayout;
+    auto *infoBtn = new QPushButton(QStringLiteral("📋 信息面板"));
+    infoBtn->setCheckable(true);
+    infoBtn->setChecked(true);
     auto *picBtn = new QPushButton(QStringLiteral("🖼 图片面板"));
     picBtn->setCheckable(true);
-    picBtn->setChecked(true);
     auto *dataBtn = new QPushButton(QStringLiteral("📊 数据面板"));
     dataBtn->setCheckable(true);
     auto *viewGroup = new QButtonGroup(this);
     viewGroup->setExclusive(true);
+    viewGroup->addButton(infoBtn);
     viewGroup->addButton(picBtn);
     viewGroup->addButton(dataBtn);
-    connect(picBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(0); });
-    connect(dataBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(1); });
+    connect(infoBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(0); });
+    connect(picBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(1); });
+    connect(dataBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(2); });
     auto *cvHint = new QLabel(QStringLiteral(
         "低余弦行/低指标即精度丢失层；💾 导出 JSON+CSV+标注图引用"));
     cvHint->setWordWrap(true);
@@ -1415,16 +1436,18 @@ void MainWindow::onAccCompare() {
     m_btnCompare->setEnabled(false);
     appendLog(QStringLiteral("精度对比: %1（四级漏斗流式输出，先出左图，约 3~6 分钟）")
                   .arg(QFileInfo(onnx).fileName()), "#8b97a8");
-    // 结果就地显示在本页右大区（面板层），流式填充
+    // 结果就地显示在本页右大区（面板层），流式填充；默认停在信息面板看操作流
     m_views->setCurrentIndex(1);
     m_navLab->setChecked(true);
     m_labStack->setCurrentIndex(1);
     m_rkRightStack->setCurrentIndex(1);
+    m_cmpViewStack->setCurrentIndex(0);
+    m_cmpLog->clear();
     m_imgOnnx->setPlaceholder(QStringLiteral("① ONNX 推理中…"));
-    m_imgFp16->setPlaceholder(QStringLiteral("② 构建中…"));
-    m_imgInt8->setPlaceholder(QStringLiteral("③ 量化中…"));
+    m_imgFp16->setPlaceholder(QStringLiteral("板离线/未跑（② 板上 FP16）"));
+    m_imgFp16Sim->setPlaceholder(QStringLiteral("③ 构建中…"));
     m_imgBoard->setPlaceholder(QStringLiteral("④ 板离线/未跑"));
-    m_cmpSummary->setText(QStringLiteral("四级对比运行中…（① ONNX → ② FP16 → ③ int8 → ④ 板上）"));
+    m_cmpSummary->setText(QStringLiteral("四级对比运行中…（① ONNX → ② 板上FP16 → ③ FP16模拟 → ④ 板上int8）"));
     // dump 目录给 Windows 路径：WSL python 经 /mnt/c 写入（norm_path 自动转），
     // Qt 直接用原路径读——同一物理目录，两侧一致
     const QString dumpWin = QDir::temp().filePath(QStringLiteral("acc_dump"));
@@ -1472,13 +1495,13 @@ void MainWindow::updateCompareSummary(const QJsonObject &o) {
         return stages.value(k).toObject();
     };
     QString body = QStringLiteral("① ONNX 基线（float，金标准）");
-    if (nOf("2_fp16_sim") >= 0)
-        body += QStringLiteral("<br>") + line(QStringLiteral("② RKNN FP16 模拟"),
-            nOf("2_fp16_sim"), miouOf("2_vs_1"), dropOf("2_vs_1"), cosAvg("2_vs_1"));
-    if (nOf("3_int8_sim") >= 0)
-        body += QStringLiteral("<br>") + line(QStringLiteral("③ RKNN int8 模拟"),
-            nOf("3_int8_sim"), miouOf("3_vs_1"), dropOf("3_vs_1"), cosAvg("3_vs_1"));
-    const QJsonObject st4 = secOf("4_board");
+    if (nOf("2_board_fp16") >= 0)
+        body += QStringLiteral("<br>") + line(QStringLiteral("② 板上 FP16"),
+            nOf("2_board_fp16"), miouOf("2_vs_1"), dropOf("2_vs_1"), cosAvg("2_vs_1"));
+    if (nOf("3_fp16_sim") >= 0)
+        body += QStringLiteral("<br>") + line(QStringLiteral("③ FP16 模拟（参考）"),
+            nOf("3_fp16_sim"), miouOf("3_vs_1"), dropOf("3_vs_1"), cosAvg("3_vs_1"));
+    const QJsonObject st4 = secOf("4_board_int8");
     if (st4.contains("n"))
         body += QStringLiteral("<br>") + line(QStringLiteral("④ 板上 int8"),
             st4.value("n").toInt(), miouOf("4_vs_1"), dropOf("4_vs_1"), cosAvg("4_vs_1"));
@@ -1506,16 +1529,16 @@ void MainWindow::updateCompareSummary(const QJsonObject &o) {
         return QStringLiteral("检出 %1 框\nmean IoU %2\nconf 掉点 %3\n张量余弦 %4")
             .arg(n).arg(miou, 0, 'f', 4).arg(drop, 0, 'f', 4).arg(cos, 0, 'f', 5);
     };
-    const bool e4 = stages.value("4_board").toObject().contains(QStringLiteral("error"));
-    const bool e23 = nOf("2_fp16_sim") < 0 || nOf("3_int8_sim") < 0;
+    const bool e2 = stages.value("2_board_fp16").toObject().contains(QStringLiteral("error"));
+    const bool e4 = stages.value("4_board_int8").toObject().contains(QStringLiteral("error"));
     m_metricOnnx->setText(QStringLiteral("检出 %1 框\nfloat32 基准\n金标准")
                               .arg(nOf("1_onnx")));
-    m_metricFp16->setText(metric(nOf("2_fp16_sim"), miouOf("2_vs_1"),
-                                 dropOf("2_vs_1"), cosAvg("2_vs_1"), e23));
-    m_metricInt8->setText(metric(nOf("3_int8_sim"), miouOf("3_vs_1"),
-                                 dropOf("3_vs_1"), cosAvg("3_vs_1"), e23));
-    m_metricBoard->setText(metric(nOf("4_board"), miouOf("4_vs_1"),
-                                  dropOf("4_vs_1"), cosAvg("4_vs_1"), e4));
+    m_metricFp16->setText(metric(nOf("2_board_fp16"), miouOf("2_vs_1"),
+                                 dropOf("2_vs_1"), cosAvg("2_vs_1"), e2));
+    m_metricFp16Sim->setText(metric(nOf("3_fp16_sim"), miouOf("3_vs_1"),
+                                    dropOf("3_vs_1"), cosAvg("3_vs_1"), false));
+    m_metricInt8->setText(metric(nOf("4_board_int8"), miouOf("4_vs_1"),
+                                 dropOf("4_vs_1"), cosAvg("4_vs_1"), e4));
 }
 
 // 对比视图双表：layers 来自 rknn_acc（sim_*  填左表，rt_* 填右表），低余弦标红
