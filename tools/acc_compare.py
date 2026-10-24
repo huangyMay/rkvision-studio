@@ -219,6 +219,24 @@ def main():
             report["stages"]["4_board"] = {"error": str(e)[:200]}
             report["match"]["4_vs_1"] = {"label": "板上int8", "error": str(e)[:200]}
 
+    # 逐层精度（复用 ③ 的 int8 RKNN 对象直接 accuracy_analysis——不重新构建）
+    if dump_dir:
+        try:
+            from rknn_acc import parse_error_analysis
+            acc_dir = os.path.join(dump_dir, "acc")
+            inputs = [image_path]
+            rk_i8.accuracy_analysis(inputs=inputs, output_dir=acc_dir,
+                                    target="rk3576", device_id=device if device else None)
+            layers = parse_error_analysis(os.path.join(acc_dir, "error_analysis.txt"))
+            if layers:
+                report["layers"] = layers
+                lows = [l for l in layers if l.get("sim_single_cos", 1) < 0.99]
+                report["min_single"] = min((l["sim_single_cos"] for l in layers
+                                            if "sim_single_cos" in l), default=1.0)
+                report["n_low"] = len(lows)
+        except Exception as e:  # noqa: BLE001
+            report["layers_error"] = str(e)[:200]
+
     report["total_ms"] = round((time.time() - t_all) * 1000, 1)
 
     # 对比视图数据：落盘 ①/④ 标注图 + 各级 detections（供 Qt 对比页直接加载）
