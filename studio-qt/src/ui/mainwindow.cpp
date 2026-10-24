@@ -868,14 +868,45 @@ void MainWindow::buildUi() {
     auto *cvLayout = new QVBoxLayout(pageCompareView);
     cvLayout->setContentsMargins(4, 4, 4, 4);
     cvLayout->setSpacing(6);
+
+    // 切换行+导出固定在面板顶部（不随内容滚动消失）
+    auto *cvTail = new QHBoxLayout;
+    auto *infoBtn = new QPushButton(QStringLiteral("📋 信息面板"));
+    infoBtn->setCheckable(true);
+    infoBtn->setChecked(true);
+    auto *picBtn = new QPushButton(QStringLiteral("🖼 图片面板"));
+    picBtn->setCheckable(true);
+    auto *dataBtn = new QPushButton(QStringLiteral("📊 数据面板"));
+    dataBtn->setCheckable(true);
+    auto *viewGroup = new QButtonGroup(this);
+    viewGroup->setExclusive(true);
+    viewGroup->addButton(infoBtn);
+    viewGroup->addButton(picBtn);
+    viewGroup->addButton(dataBtn);
+    connect(infoBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(0); });
+    connect(picBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(1); });
+    connect(dataBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(2); });
+    m_btnExport = new QPushButton(QStringLiteral("💾 导出报告"));
+    cvTail->addWidget(infoBtn);
+    cvTail->addWidget(picBtn);
+    cvTail->addWidget(dataBtn);
+    cvTail->addStretch(1);
+    cvTail->addWidget(m_btnExport);
+    cvLayout->addLayout(cvTail);
+
     m_cmpSummary = new QLabel(QStringLiteral(
         "点「⚖️精度对比」→ 四级逐级流式显示：每完成一级，对应图片与数字即时出现"));
     m_cmpSummary->setWordWrap(true);
     cvLayout->addWidget(m_cmpSummary);
 
-    // 面板切换：📋 信息面板（默认，操作流+结果） / 🖼 图片面板（2×2 四图） / 📊 数据面板（四栏+逐层）
+    // 内容区整体套 QScrollArea：任何屏幕/任何内容量都不丢按钮（固定窗口+滚动条）
     m_cmpViewStack = new QStackedWidget;
-    cvLayout->addWidget(m_cmpViewStack, 1);
+    auto *cmpScroll = new QScrollArea;
+    cmpScroll->setWidgetResizable(true);
+    cmpScroll->setFrameShape(QFrame::NoFrame);
+    cmpScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    cmpScroll->setWidget(m_cmpViewStack);
+    cvLayout->addWidget(cmpScroll, 1);
 
     // 视图 0：信息面板（操作流日志 + 摘要，默认显示）
     auto *infoPanel = new QWidget;
@@ -957,32 +988,6 @@ void MainWindow::buildUi() {
     dv->addLayout(tablesRow, 1);
     m_cmpViewStack->addWidget(dataPanel);             // m_cmpViewStack index 2
 
-    // 切换行 + 导出
-    auto *cvTail = new QHBoxLayout;
-    auto *infoBtn = new QPushButton(QStringLiteral("📋 信息面板"));
-    infoBtn->setCheckable(true);
-    infoBtn->setChecked(true);
-    auto *picBtn = new QPushButton(QStringLiteral("🖼 图片面板"));
-    picBtn->setCheckable(true);
-    auto *dataBtn = new QPushButton(QStringLiteral("📊 数据面板"));
-    dataBtn->setCheckable(true);
-    auto *viewGroup = new QButtonGroup(this);
-    viewGroup->setExclusive(true);
-    viewGroup->addButton(infoBtn);
-    viewGroup->addButton(picBtn);
-    viewGroup->addButton(dataBtn);
-    connect(infoBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(0); });
-    connect(picBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(1); });
-    connect(dataBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(2); });
-    auto *cvHint = new QLabel(QStringLiteral(
-        "低余弦行/低指标即精度丢失层；💾 导出 JSON+CSV+标注图引用"));
-    cvHint->setWordWrap(true);
-    m_btnExport = new QPushButton(QStringLiteral("💾 导出报告"));
-    cvTail->addWidget(picBtn);
-    cvTail->addWidget(dataBtn);
-    cvTail->addWidget(cvHint, 1);
-    cvTail->addWidget(m_btnExport);
-    cvLayout->addLayout(cvTail);
     connect(m_btnExport, &QPushButton::clicked, this, &MainWindow::onExportCompare);
 
     // ---- 信号 ----
