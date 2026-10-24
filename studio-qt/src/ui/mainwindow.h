@@ -53,6 +53,7 @@ private slots:
     void onAccCompare();
     void onExportCompare();
     void fillLayerTables(const QJsonArray &layers);   // 填充对比视图双表（sim|runtime）
+    void updateCompareSummary(const QJsonObject &o);  // 对比视图漏斗摘要（流式渐进刷新）
     void appendLog(const QString &msg, const QString &color = {});
 
 public slots:
@@ -106,11 +107,11 @@ private:
     // ONNX LAB 页
     QStackedWidget *m_views = nullptr;         // 页面栈：0=LIVE 1=模型实验室 2=WORKFLOW
     QStackedWidget *m_labStack = nullptr;      // 实验室内部子页栈：0=ONNX 基线 1=模拟量化
+    QStackedWidget *m_rkRightStack = nullptr;  // 模拟量化页右大区：0=模拟预览 1=精度对比面板
     QPushButton *m_navLive = nullptr;          // 导航页签（与页面栈双向同步）
     QPushButton *m_navLab = nullptr;           // 模型实验室页签（合并 ONNX LAB + RKNN LAB）
     QPushButton *m_segInfer = nullptr;         // 实验室内部段：ONNX 基线
     QPushButton *m_segSim = nullptr;           // 实验室内部段：模拟量化
-    QPushButton *m_segCompare = nullptr;       // 实验室内部段：对比视图
     PreviewWidget *m_cmpLocalPreview = nullptr;   // 对比视图：本地 ONNX 结果图
     PreviewWidget *m_cmpBoardPreview = nullptr;   // 对比视图：板上结果图
     QTableWidget *m_cmpSimTable = nullptr;     // 对比视图：模拟器逐层

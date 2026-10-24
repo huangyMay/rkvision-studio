@@ -150,6 +150,32 @@ def main():
               "meanstd": meanstd, "device": device or "(skipped)",
               "tensor_cosine": {}, "match": {}, "stages": {}}
 
+    # 流式输出：每完成一级立刻打印 STAGE 行（Qt 逐行解析、渐进渲染）
+    def emit_stage(stage_key, extra=None):
+        payload = {"stage": stage_key, "stages": report["stages"],
+                   "tensor_cosine": report["tensor_cosine"],
+                   "match": report["match"]}
+        if extra:
+            payload.update(extra)
+        print("STAGE " + json.dumps(payload, ensure_ascii=False), flush=True)
+
+    def draw(img_src, dets, color, tag):
+        c = img_src.copy()
+        for d in (dets or []):
+            p1, p2 = (int(d[0]), int(d[1])), (int(d[2]), int(d[3]))
+            cv2.rectangle(c, p1, p2, color, 2)
+            cv2.putText(c, f"{tag} {d[4]:.2f}", (p1[0], max(14, p1[1] - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+        return c
+
+    def stage_image(name, img_annotated):
+        if dump_dir:
+            os.makedirs(dump_dir, exist_ok=True)
+            p = os.path.join(dump_dir, name)
+            cv2.imwrite(p, img_annotated)
+            return p
+        return ""
+
     def tensor_cosine(a_list, b_list):
         import numpy as np
         cos = []
@@ -169,6 +195,8 @@ def main():
     report["stages"]["1_onnx"] = {"ms": round((time.time() - t0) * 1000, 1),
                                   "n": len(d1) if d1 else 0}
     base = [[d[0], d[1], d[2], d[3], d[4], d[5]] for d in (d1 or [])]
+    emit_stage("1_onnx", {"image": stage_image("onnx_result.jpg",
+                                               draw(img, d1, (0, 255, 0), "onnx"))})
 
     # ② RKNN FP16 模拟
     t0 = time.time()
@@ -179,6 +207,7 @@ def main():
     report["tensor_cosine"]["2_vs_1"] = tensor_cosine(outs1, o2)
     b2 = [[d[0], d[1], d[2], d[3], d[4]] for d in (d2 or [])]
     report["match"]["2_vs_1"] = match_report(base, b2, "FP16模拟 vs ONNX")
+    emit_stage("2_fp16_sim")
     try:
         rk_fp16.release()
     except Exception:
@@ -197,6 +226,8 @@ def main():
     report["tensor_cosine"]["3_vs_1"] = tensor_cosine(outs1, o3)
     b3 = [[d[0], d[1], d[2], d[3], d[4]] for d in (d3 or [])]
     report["match"]["3_vs_1"] = match_report(base, b3, "int8模拟 vs ONNX")
+    emit_stage("3_int8_sim", {"image": stage_image("int8sim_result.jpg",
+                                                   draw(img, d3, (255, 128, 0), "i8sim"))})
 
     # ④ 板上 int8（同一 int8 模型，切真板 runtime）
     d4 = None
@@ -215,9 +246,12 @@ def main():
             report["tensor_cosine"]["4_vs_1"] = tensor_cosine(outs1, o4)
             b4 = [[d[0], d[1], d[2], d[3], d[4]] for d in (d4 or [])]
             report["match"]["4_vs_1"] = match_report(base, b4, "板上int8 vs ONNX")
+            emit_stage("4_board", {"image": stage_image("board_result.jpg",
+                                                        draw(img, d4, (0, 128, 255), "board"))})
         except Exception as e:  # noqa: BLE001
             report["stages"]["4_board"] = {"error": str(e)[:200]}
             report["match"]["4_vs_1"] = {"label": "板上int8", "error": str(e)[:200]}
+            emit_stage("4_board")
 
     # 逐层精度（复用 ③ 的 int8 RKNN 对象直接 accuracy_analysis——不重新构建）
     if dump_dir:
@@ -234,41 +268,19 @@ def main():
                 report["min_single"] = min((l["sim_single_cos"] for l in layers
                                             if "sim_single_cos" in l), default=1.0)
                 report["n_low"] = len(lows)
+                print("LAYERS " + json.dumps(layers, ensure_ascii=False), flush=True)
         except Exception as e:  # noqa: BLE001
             report["layers_error"] = str(e)[:200]
 
     report["total_ms"] = round((time.time() - t_all) * 1000, 1)
 
-    # 对比视图数据：落盘 ①/④ 标注图 + 各级 detections（供 Qt 对比页直接加载）
+    # detections 留档（画面已在各阶段即时落盘）
     if dump_dir:
-        os.makedirs(dump_dir, exist_ok=True)
-
-        def draw(img_src, dets, color, tag):
-            c = img_src.copy()
-            for d in (dets or []):
-                p1, p2 = (int(d[0]), int(d[1])), (int(d[2]), int(d[3]))
-                cv2.rectangle(c, p1, p2, color, 2)
-                cv2.putText(c, f"{tag} {d[4]:.2f}", (p1[0], max(14, p1[1] - 4)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-            return c
-
-        cv2.imwrite(os.path.join(dump_dir, "onnx_result.jpg"),
-                    draw(img, d1, (0, 255, 0), "onnx"))
-        if d3:
-            cv2.imwrite(os.path.join(dump_dir, "int8sim_result.jpg"),
-                        draw(img, d3, (255, 128, 0), "i8sim"))
-        if device and d4:
-            cv2.imwrite(os.path.join(dump_dir, "board_result.jpg"),
-                        draw(img, d4, (0, 128, 255), "board"))
         json.dump({"1_onnx": [list(map(float, d)) for d in (d1 or [])],
                    "3_int8_sim": [list(map(float, d)) for d in (d3 or [])],
                    "4_board": [list(map(float, d)) for d in (d4 or [])]},
                   open(os.path.join(dump_dir, "detections.json"), "w"))
         report["dump_dir"] = dump_dir
-        report["dump"] = {"onnx": os.path.join(dump_dir, "onnx_result.jpg"),
-                          "int8sim": os.path.join(dump_dir, "int8sim_result.jpg"),
-                          "board": os.path.join(dump_dir, "board_result.jpg")
-                          if device and d4 else ""}
 
     print(json.dumps(report, ensure_ascii=False))
 

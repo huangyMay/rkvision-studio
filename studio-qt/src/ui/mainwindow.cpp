@@ -161,6 +161,31 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_rknn = new RknnSimRunner(this);
     m_compare = new AccCompareRunner(this);
     connect(m_compare, &AccCompareRunner::logLine, this, &MainWindow::appendLog);
+    // 流式：每级完成即时刷新摘要与画面（不等全跑完）
+    connect(m_compare, &AccCompareRunner::stageUpdate, this, [this](const QString &json) {
+        const QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
+        const QString img = o.value("image").toString();
+        if (!img.isEmpty()) {
+            // 脚本回传 WSL 路径（/mnt/c/.. 或 /tmp/..），转 Qt(Windows) 可读形态
+            QString p = img;
+            if (p.startsWith(QStringLiteral("/mnt/")) && p.size() > 8)
+                p = p.mid(5, 1).toUpper() + ":/" + p.mid(8);
+            else if (p.startsWith(QStringLiteral("/")))
+                p = QStringLiteral("//wsl.localhost/Ubuntu-22.04") + p;
+            const QImage im(p);
+            if (!im.isNull()) {
+                if (o.value("stage").toString() == QStringLiteral("1_onnx"))
+                    m_cmpLocalPreview->setImage(im);
+                else
+                    m_cmpBoardPreview->setImage(im);
+            }
+        }
+        updateCompareSummary(o);
+    });
+    connect(m_compare, &AccCompareRunner::layersUpdate, this, [this](const QString &json) {
+        fillLayerTables(QJsonDocument::fromJson(json.toUtf8()).array());
+        m_cmpRightTitle->setText(QStringLiteral("板端逐层（runtime_error）——红字=低于 0.99 验收线"));
+    });
     connect(m_compare, &AccCompareRunner::finished, this, [this](bool ok, const QString &json,
                                                                  const QString &err) {
         m_btnCompare->setEnabled(true);
@@ -169,93 +194,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             QMessageBox::warning(this, QStringLiteral("精度对比"), err);
             return;
         }
-        const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
-        const QJsonObject o = doc.object();
-        const QJsonObject stages = o.value("stages").toObject();
-        const QJsonObject match = o.value("match").toObject();
-        const QJsonObject tcos = o.value("tensor_cosine").toObject();
-        auto nOf = [&stages](const QString &k) {
-            return stages.value(k).toObject().value("n").toInt(-1);
-        };
-        auto miouOf = [&match](const QString &k) {
-            return match.value(k).toObject().value("mean_iou").toDouble(-1);
-        };
-        auto dropOf = [&match](const QString &k) {
-            // 框级 conf 掉点均值（matched 框的 dconf 平均，负=变自信差）
-            const QJsonArray drops = match.value(k).toObject().value("conf_drops").toArray();
-            if (drops.isEmpty()) return 0.0;
-            double s = 0;
-            for (const QJsonValue &v : drops) s += v.toDouble();
-            return s / drops.size();
-        };
-        auto cosAvg = [&tcos](const QString &k) {
-            const QJsonArray a = tcos.value(k).toArray();
-            if (a.isEmpty()) return 0.0;
-            double s = 0;
-            for (const QJsonValue &v : a) s += v.toDouble();
-            return s / a.size();
-        };
-        auto line = [](const QString &tag, int n, double miou, double drop, double cos) {
-            return QStringLiteral("%1  检出 %2 框 · mean IoU %3 · conf 掉点 %4 · 张量余弦 %5\n")
-                .arg(tag, -22)
-                .arg(n)
-                .arg(miou, 0, 'f', 4)
-                .arg(drop, 0, 'f', 4)
-                .arg(cos, 0, 'f', 5);
-        };
-        QString body = QStringLiteral("① ONNX 基线（float，金标准）\n\n");
-        body += line(QStringLiteral("② RKNN FP16 模拟"), nOf("2_fp16_sim"),
-                     miouOf("2_vs_1"), dropOf("2_vs_1"), cosAvg("2_vs_1"));
-        body += line(QStringLiteral("③ RKNN int8 模拟"), nOf("3_int8_sim"),
-                     miouOf("3_vs_1"), dropOf("3_vs_1"), cosAvg("3_vs_1"));
-        const QJsonObject st4 = stages.value("4_board").toObject();
-        if (st4.contains("n")) {
-            body += line(QStringLiteral("④ 板上 int8"), st4.value("n").toInt(),
-                         miouOf("4_vs_1"), dropOf("4_vs_1"), cosAvg("4_vs_1"));
-        } else if (st4.contains("error")) {
-            body += QStringLiteral("④ 板上 int8  —— 连接失败（查设备地址/rknn_server）\n");
-        } else {
-            body += QStringLiteral("④ 板上 int8  —— 设备地址为空，跳过\n");
-        }
-        appendLog(QStringLiteral("四级对比完成——结果见「📊 对比视图」子页"), "#3ecf72");
-
-        appendLog(QStringLiteral("四级对比完成——结果见「📊 对比视图」子页"), "#3ecf72");
-        m_cmpSummary->setText(QStringLiteral("<b>%1</b> @ %2 · 基准 ① ONNX float32（检出 %3 框）· 总耗时 %4 s<br>%5")
-                                  .arg(o.value("model").toString().toHtmlEscaped(),
-                                       o.value("image").toString().toHtmlEscaped())
-                                  .arg(nOf("1_onnx"))
-                                  .arg(o.value("total_ms").toDouble() / 1000, 0, 'f', 1)
-                                  .arg(body.toHtmlEscaped().replace(QLatin1Char('\n'),
-                                                                    QStringLiteral("<br>"))));
-
-        // ---- 填充「📊 对比视图」子页：画面 + 逐层表（sim|runtime 双列）+ 漏斗摘要 ----
-        const QJsonArray layers = o.value("layers").toArray();
-        const QString dump = o.value("dump_dir").toString();
-        if (!dump.isEmpty()) {
-            const QImage localImg(dump + QStringLiteral("/onnx_result.jpg"));
-            if (!localImg.isNull()) m_cmpLocalPreview->setImage(localImg);
-            const QString boardImg = dump + QStringLiteral("/board_result.jpg");
-            if (QFileInfo::exists(boardImg)) {
-                const QImage bi(boardImg);
-                if (!bi.isNull()) m_cmpBoardPreview->setImage(bi);
-            } else {
-                const QImage simImg(dump + QStringLiteral("/int8sim_result.jpg"));
-                if (!simImg.isNull()) m_cmpBoardPreview->setImage(simImg);
-                m_cmpRightTitle->setText(
-                    QStringLiteral("int8 模拟逐层（板离线，无真板数据）"));
-            }
-        }
-        if (!layers.isEmpty()) {
-            fillLayerTables(layers);                  // 双表（sim|runtime），低余弦标红
-        } else {
-            // acc_compare 的报告无逐层数据——提示去点 🎯（rknn_acc）填充双表
-            m_cmpRightTitle->setText(QStringLiteral(
-                "int8 模拟逐层（点「🎯量化精度」后填充；⚖️ 不产逐层数据）"));
-        }
+        const QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
+        updateCompareSummary(o);
         m_lastCompareJson = json;                 // 供 💾 导出
-        m_cmpDumpDir = dump;
-        m_labStack->setCurrentIndex(2);           // 跑完自动切到对比视图
-        m_segCompare->setChecked(true);
+        m_cmpDumpDir = o.value("dump_dir").toString();
+        appendLog(QStringLiteral("四级对比完成（%1 s）——逐层表 %2")
+                      .arg(o.value("total_ms").toDouble() / 1000, 0, 'f', 0)
+                      .arg(o.contains(QStringLiteral("layers"))
+                               ? QStringLiteral("已填充") : QStringLiteral("见「🎯量化精度」")),
+                  "#3ecf72");
     });
     m_acc = new BoardAccRunner(this);
     connect(m_acc, &BoardAccRunner::logLine, this, &MainWindow::appendLog);
@@ -294,8 +241,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             .arg(minSingle, 0, 'f', 5));
         m_views->setCurrentIndex(1);
         m_navLab->setChecked(true);
-        m_labStack->setCurrentIndex(2);
-        m_segCompare->setChecked(true);
+        m_labStack->setCurrentIndex(1);
+        m_rkRightStack->setCurrentIndex(1);       // 精度对比面板
         appendLog(QStringLiteral("逐层明细文件: %1/error_analysis.txt").arg(outDir), "#8b97a8");
         m_lastCompareJson = json;                 // 供 💾 导出（layers 数据源）
     });
@@ -683,13 +630,8 @@ void MainWindow::buildUi() {
     segGroup->setExclusive(true);
     segGroup->addButton(m_segInfer);
     segGroup->addButton(m_segSim);
-    m_segCompare = new QPushButton(QStringLiteral("📊 对比视图 / 逐层精度"));
-    m_segCompare->setObjectName("NavTab");
-    m_segCompare->setCheckable(true);
-    segGroup->addButton(m_segCompare);
     segRow->addWidget(m_segInfer);
     segRow->addWidget(m_segSim);
-    segRow->addWidget(m_segCompare);
     segRow->addStretch();
     labOuter->addLayout(segRow);
     m_labStack = new QStackedWidget;
@@ -789,7 +731,6 @@ void MainWindow::buildUi() {
     connect(m_navWorkflow, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(2); });
     connect(m_segInfer, &QPushButton::clicked, this, [this] { m_labStack->setCurrentIndex(0); });
     connect(m_segSim, &QPushButton::clicked, this, [this] { m_labStack->setCurrentIndex(1); });
-    connect(m_segCompare, &QPushButton::clicked, this, [this] { m_labStack->setCurrentIndex(2); });
 
     // ---- 页 2：RKNN LAB 模拟推理（toolkit2 模拟器：ONNX+转换配置 → build → 模拟） ----
     auto *pageRknn = new QWidget;
@@ -895,9 +836,16 @@ void MainWindow::buildUi() {
     auto *rright = new QVBoxLayout;
     rright->setSpacing(8);
     rbody->addLayout(rright, 1);
+    // 右大区双层：0=模拟推理预览（⚡） / 1=精度对比面板（⚖️ 流式填充）
+    m_rkRightStack = new QStackedWidget;
+    rright->addWidget(m_rkRightStack, 1);
+    auto *simContainer = new QWidget;
+    auto *simL = new QVBoxLayout(simContainer);
+    simL->setContentsMargins(0, 0, 0, 0);
+    simL->setSpacing(8);
     m_rkPreview = new PreviewWidget;
     m_rkPreview->setPlaceholder(QStringLiteral("RKNN LAB — ONNX+转换配置 → 模拟推理"));
-    rright->addWidget(m_rkPreview, 1);
+    simL->addWidget(m_rkPreview, 1);
     auto *rkStatsBar = new QFrame;
     rkStatsBar->setObjectName("StatsBar");
     auto *rkStatsL = new QHBoxLayout(rkStatsBar);
@@ -905,16 +853,17 @@ void MainWindow::buildUi() {
     m_rkStats = new QLabel(QStringLiteral("RKNN SIM READY — 模拟耗时为 x86 执行，非板端 NPU 性能"));
     m_rkStats->setObjectName("StatsText");
     rkStatsL->addWidget(m_rkStats);
-    rright->addWidget(rkStatsBar);
+    simL->addWidget(rkStatsBar);
+    m_rkRightStack->addWidget(simContainer);          // m_rkRightStack index 0
 
-    // ---- 实验室子页 2：📊 对比视图（上双画面：本地|板上；下双列：sim|runtime 逐层） ----
-    auto *pageCompareView = new QWidget;
-    m_labStack->addWidget(pageCompareView);          // labStack index 2
+    // ---- 精度对比面板（⚖️ 运行/结果就地显示在本页右大区，流式填充） ----
+    auto *pageCompareView = new QWidget;              // 命名沿用；实为 m_rkRightStack 第 1 层
+    m_rkRightStack->addWidget(pageCompareView);       // m_rkRightStack index 1
     auto *cvLayout = new QVBoxLayout(pageCompareView);
-    cvLayout->setContentsMargins(14, 10, 14, 10);
-    cvLayout->setSpacing(8);
+    cvLayout->setContentsMargins(4, 4, 4, 4);
+    cvLayout->setSpacing(6);
     m_cmpSummary = new QLabel(QStringLiteral(
-        "点「⚖️精度对比」跑完四级后，此处显示漏斗摘要；双画面与逐层表自动填充"));
+        "点「⚖️精度对比」→ 四级逐级流式显示：先出左图，每级数字即时刷新，逐层表最后填充"));
     m_cmpSummary->setWordWrap(true);
     cvLayout->addWidget(m_cmpSummary);
 
@@ -1288,6 +1237,7 @@ void MainWindow::onProbe() {
 
 void MainWindow::onRknnSim() {
     if (m_rknn->running()) return;
+    m_rkRightStack->setCurrentIndex(0);           // 模拟推理结果显示在预览层
     const QString model = m_rkModelPath->text().trimmed();
     const QString image = m_rkImagePath->text().trimmed();
     if (model.isEmpty() || !QFileInfo::exists(model)) {
@@ -1403,8 +1353,16 @@ void MainWindow::onAccCompare() {
     const QString device = m_accDevice->text().trimmed();   // 空则跳过④
 
     m_btnCompare->setEnabled(false);
-    appendLog(QStringLiteral("精度对比: %1（四级漏斗，约 3~6 分钟）")
+    appendLog(QStringLiteral("精度对比: %1（四级漏斗流式输出，先出左图，约 3~6 分钟）")
                   .arg(QFileInfo(onnx).fileName()), "#8b97a8");
+    // 结果就地显示在本页右大区（面板层），流式填充
+    m_views->setCurrentIndex(1);
+    m_navLab->setChecked(true);
+    m_labStack->setCurrentIndex(1);
+    m_rkRightStack->setCurrentIndex(1);
+    m_cmpLocalPreview->setPlaceholder(QStringLiteral("① ONNX 推理中…"));
+    m_cmpBoardPreview->setPlaceholder(QStringLiteral("②③④ 完成后显示对应级结果"));
+    m_cmpSummary->setText(QStringLiteral("四级对比运行中…（① ONNX → ② FP16 → ③ int8 → ④ 板上）"));
     // dump 目录给 Windows 路径：WSL python 经 /mnt/c 写入（norm_path 自动转），
     // Qt 直接用原路径读——同一物理目录，两侧一致
     const QString dumpWin = QDir::temp().filePath(QStringLiteral("acc_dump"));
@@ -1416,6 +1374,68 @@ void MainWindow::onAccCompare() {
                      device, meanstd,
                      OnnxRunner::toWslPath(dsLocal),
                      dumpWin);
+}
+
+// 对比视图漏斗摘要：从 stages/match/tensor_cosine 构建文案，流式渐进刷新
+void MainWindow::updateCompareSummary(const QJsonObject &o) {
+    const QJsonObject stages = o.value("stages").toObject();
+    const QJsonObject match = o.value("match").toObject();
+    const QJsonObject tcos = o.value("tensor_cosine").toObject();
+    auto nOf = [&stages](const QString &k) {
+        return stages.value(k).toObject().value("n").toInt(-1);
+    };
+    auto miouOf = [&match](const QString &k) {
+        return match.value(k).toObject().value("mean_iou").toDouble(-1);
+    };
+    auto dropOf = [&match](const QString &k) {
+        const QJsonArray drops = match.value(k).toObject().value("conf_drops").toArray();
+        if (drops.isEmpty()) return 0.0;
+        double s = 0;
+        for (const QJsonValue &v : drops) s += v.toDouble();
+        return s / drops.size();
+    };
+    auto cosAvg = [&tcos](const QString &k) {
+        const QJsonArray a = tcos.value(k).toArray();
+        if (a.isEmpty()) return 0.0;
+        double s = 0;
+        for (const QJsonValue &v : a) s += v.toDouble();
+        return s / a.size();
+    };
+    auto line = [](const QString &tag, int n, double miou, double drop, double cos) {
+        return QStringLiteral("%1  检出 %2 框 · mean IoU %3 · conf 掉点 %4 · 张量余弦 %5")
+            .arg(tag, -22).arg(n)
+            .arg(miou, 0, 'f', 4).arg(drop, 0, 'f', 4).arg(cos, 0, 'f', 5);
+    };
+    auto secOf = [&stages](const QString &k) {
+        return stages.value(k).toObject();
+    };
+    QString body = QStringLiteral("① ONNX 基线（float，金标准）");
+    if (nOf("2_fp16_sim") >= 0)
+        body += QStringLiteral("<br>") + line(QStringLiteral("② RKNN FP16 模拟"),
+            nOf("2_fp16_sim"), miouOf("2_vs_1"), dropOf("2_vs_1"), cosAvg("2_vs_1"));
+    if (nOf("3_int8_sim") >= 0)
+        body += QStringLiteral("<br>") + line(QStringLiteral("③ RKNN int8 模拟"),
+            nOf("3_int8_sim"), miouOf("3_vs_1"), dropOf("3_vs_1"), cosAvg("3_vs_1"));
+    const QJsonObject st4 = secOf("4_board");
+    if (st4.contains("n"))
+        body += QStringLiteral("<br>") + line(QStringLiteral("④ 板上 int8"),
+            st4.value("n").toInt(), miouOf("4_vs_1"), dropOf("4_vs_1"), cosAvg("4_vs_1"));
+    else if (st4.contains("error"))
+        body += QStringLiteral("<br>④ 板上 int8 —— 连接失败（查设备地址/rknn_server）");
+    else
+        body += QStringLiteral("<br>④ 板上 int8 —— 设备地址为空，跳过");
+    if (o.contains(QStringLiteral("min_single")))
+        body += QStringLiteral("<br>逐层: %1 层 · 最低 sim_single %2 · 低余弦 %3 层")
+            .arg(o.value("layers").toArray().size())
+            .arg(o.value("min_single").toDouble(), 0, 'f', 5)
+            .arg(o.value("n_low").toInt());
+    body += QStringLiteral("<br><i>判读: ②掉点=转换损失(应≈0) · ③掉点=量化损失 · ④-③=板端实现差异</i>");
+    m_cmpSummary->setText(QStringLiteral("<b>%1</b> @ %2 · 基准 ① ONNX float32（检出 %3 框）%4<br>%5")
+                              .arg(o.value("model").toString().toHtmlEscaped(),
+                                   o.value("image").toString().toHtmlEscaped())
+                              .arg(nOf("1_onnx"))
+                              .arg(o.value("total_ms").toDouble() / 1000, 0, 'f', 1)
+                              .arg(body));
 }
 
 // 对比视图双表：layers 来自 rknn_acc（sim_*  填左表，rt_* 填右表），低余弦标红

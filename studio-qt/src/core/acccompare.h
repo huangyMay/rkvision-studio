@@ -22,6 +22,10 @@ public:
 signals:
     void finished(bool ok, const QString &summaryJson, const QString &error);
     void logLine(const QString &text, const QString &color);
+    // 流式：每完成一级发一条（json 含 stage/stages/match/tensor_cosine[/image]）
+    void stageUpdate(const QString &json);
+    // 流式：逐层余弦就绪（accuracy_analysis 完成）
+    void layersUpdate(const QString &layersJson);
 
 private:
     QProcess *m_proc = nullptr;

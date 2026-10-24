@@ -29,6 +29,16 @@ void AccCompareRunner::start(const QString &distro, const QString &scriptWsl,
     });
     connect(m_proc, &QProcess::readyReadStandardOutput, this, [this] {
         m_out += QString::fromUtf8(m_proc->readAllStandardOutput());
+        // 流式解析：STAGE {...} / LAYERS [...] 行即时上抛，UI 渐进渲染
+        QStringList lines = m_out.split(QLatin1Char('\n'));
+        m_out = lines.takeLast();                 // 半行留在缓冲
+        for (const QString &l : lines) {
+            const QString t = l.trimmed();
+            if (t.startsWith(QStringLiteral("STAGE ")))
+                emit stageUpdate(t.mid(6));
+            else if (t.startsWith(QStringLiteral("LAYERS ")))
+                emit layersUpdate(t.mid(7));
+        }
     });
     connect(m_proc, &QProcess::finished, this,
             [this](int, QProcess::ExitStatus) {
