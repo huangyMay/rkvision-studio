@@ -51,6 +51,7 @@ private slots:
     void onBoardPerf();
     void onBoardAcc();
     void onAccCompare();
+    void onExportCompare();
     void fillLayerTables(const QJsonArray &layers);   // 填充对比视图双表（sim|runtime）
     void appendLog(const QString &msg, const QString &color = {});
 
@@ -116,6 +117,9 @@ private:
     QTableWidget *m_cmpRtTable = nullptr;      // 对比视图：板端逐层
     QLabel *m_cmpRightTitle = nullptr;
     QLabel *m_cmpSummary = nullptr;            // 对比视图：四级漏斗摘要
+    QPushButton *m_btnExport = nullptr;        // 💾 导出报告
+    QString m_lastCompareJson;                 // 最近一次精度分析的原始 JSON（导出用）
+    QString m_cmpDumpDir;                      // 最近一次对比的标注图目录
     QPushButton *m_navWorkflow = nullptr;
     WorkflowPage *m_workflow = nullptr;        // 工作流配置器页
     PreviewWidget *m_inferPreview = nullptr;   // 推理结果大屏

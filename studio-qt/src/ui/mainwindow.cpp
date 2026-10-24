@@ -37,8 +37,10 @@
 #include <QMessageBox>
 #include <QProcess>
 #include <QScrollArea>
+#include <QStandardPaths>
 #include <QStackedWidget>
 #include <QTableWidget>
+#include <QTextStream>
 #include <QUrl>
 #include <QVideoSink>
 #include <QVideoFrame>
@@ -250,6 +252,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             m_cmpRightTitle->setText(QStringLiteral(
                 "int8 模拟逐层（点「🎯量化精度」后填充；⚖️ 不产逐层数据）"));
         }
+        m_lastCompareJson = json;                 // 供 💾 导出
+        m_cmpDumpDir = dump;
         m_labStack->setCurrentIndex(2);           // 跑完自动切到对比视图
         m_segCompare->setChecked(true);
     });
@@ -293,6 +297,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         m_labStack->setCurrentIndex(2);
         m_segCompare->setChecked(true);
         appendLog(QStringLiteral("逐层明细文件: %1/error_analysis.txt").arg(outDir), "#8b97a8");
+        m_lastCompareJson = json;                 // 供 💾 导出（layers 数据源）
     });
     connect(m_rknn, &RknnSimRunner::finished, this, [this](const OnnxResult &r) {
         m_btnRkSim->setEnabled(true);
@@ -939,10 +944,16 @@ void MainWindow::buildUi() {
     tablesRow->addLayout(leftCol, 1);
     tablesRow->addLayout(rightCol, 1);
     cvLayout->addLayout(tablesRow, 1);
+    auto *cvTail = new QHBoxLayout;
     auto *cvHint = new QLabel(QStringLiteral(
         "用法：点「⚖️精度对比」跑完四级 → 本页自动填充两侧画面与逐层表；低余弦行即精度丢失层"));
     cvHint->setWordWrap(true);
-    cvLayout->addWidget(cvHint);
+    m_btnExport = new QPushButton(QStringLiteral("💾 导出报告"));
+    m_btnExport->setToolTip(QStringLiteral("导出 JSON 原始数据 + 双表 CSV + 标注图路径清单"));
+    cvTail->addWidget(cvHint, 1);
+    cvTail->addWidget(m_btnExport);
+    cvLayout->addLayout(cvTail);
+    connect(m_btnExport, &QPushButton::clicked, this, &MainWindow::onExportCompare);
 
     // ---- 信号 ----
     connect(btnRefresh, &QPushButton::clicked, this, &MainWindow::refreshStatus);
@@ -1437,6 +1448,74 @@ void MainWindow::fillLayerTables(const QJsonArray &layers) {
          QStringLiteral("sim_single_cos"), layers);
     fill(m_cmpRtTable, QStringLiteral("rt_entire_cos"),
          QStringLiteral("rt_single_cos"), layers);
+}
+
+// 导出精度对比数据：JSON 原始 + 双表 CSV + 标注图引用清单，存到用户选的目录
+void MainWindow::onExportCompare() {
+    if (m_lastCompareJson.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("导出报告"),
+                             QStringLiteral("还没有精度分析数据——先点「⚖️精度对比」或「🎯量化精度」"));
+        return;
+    }
+    const QString dir = QFileDialog::getExistingDirectory(
+        this, QStringLiteral("选择导出目录"),
+        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
+    if (dir.isEmpty()) return;
+
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss"));
+    QDir().mkpath(dir);
+
+    // 1) JSON 原始数据
+    const QString jsonPath = dir + QStringLiteral("/acc_report_%1.json").arg(stamp);
+    QFile jf(jsonPath);
+    jf.open(QIODevice::WriteOnly);
+    jf.write(m_lastCompareJson.toUtf8());
+    jf.close();
+
+    // 2) 双表 CSV（逗号分隔，Excel 直开）
+    const QJsonDocument doc = QJsonDocument::fromJson(m_lastCompareJson.toUtf8());
+    const QJsonArray layers = doc.object().value("layers").toArray();
+    auto dumpCsv = [&dir, &stamp](QTableWidget *t, const QString &name) {
+        QFile f(dir + QStringLiteral("/%1_%2.csv").arg(name, stamp));
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+        QTextStream ts(&f);
+        ts.setGenerateByteOrderMark(true);           // Excel 中文兼容
+        for (int c = 0; c < t->columnCount(); ++c)
+            ts << t->horizontalHeaderItem(c)->text() << (c < t->columnCount() - 1 ? "," : "\n");
+        for (int r = 0; r < t->rowCount(); ++r) {
+            for (int c = 0; c < t->columnCount(); ++c) {
+                QTableWidgetItem *it = t->item(r, c);
+                QString v = it ? it->text() : QString();
+                v.replace(QLatin1Char(','), QLatin1Char(' '));
+                ts << v << (c < t->columnCount() - 1 ? "," : "\n");
+            }
+        }
+    };
+    dumpCsv(m_cmpSimTable, QStringLiteral("sim_layers"));
+    dumpCsv(m_cmpRtTable, QStringLiteral("runtime_layers"));
+
+    // 3) 标注图引用清单（存在则写路径）
+    QStringList refs;
+    if (!m_cmpDumpDir.isEmpty()) {
+        for (const QString &img : {QStringLiteral("onnx_result.jpg"),
+                                   QStringLiteral("int8sim_result.jpg"),
+                                   QStringLiteral("board_result.jpg")}) {
+            const QString p = m_cmpDumpDir + QStringLiteral("/") + img;
+            if (QFileInfo::exists(p)) refs << p;
+        }
+    }
+    QFile rf(dir + QStringLiteral("/images_%1.txt").arg(stamp));
+    if (rf.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        for (const QString &p : refs) rf.write((p + QStringLiteral("\n")).toUtf8());
+    }
+
+    appendLog(QStringLiteral("精度报告已导出: %1（JSON+CSV+%2 张标注图引用）").arg(dir).arg(refs.size()),
+              "#3ecf72");
+    QMessageBox::information(this, QStringLiteral("导出报告"),
+                             QStringLiteral("已导出到:\n%1\n\nacc_report_*.json（原始数据）\n"
+                                            "sim_layers_*.csv / runtime_layers_*.csv（逐层表）\n"
+                                            "images_*.txt（标注图路径，共 %2 张）")
+                                 .arg(dir).arg(refs.size()));
 }
 
 void MainWindow::onBoardAcc() {
