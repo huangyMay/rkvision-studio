@@ -14,6 +14,7 @@ class PreviewWidget;
 class RknnSimRunner;
 class AccCompareRunner;
 class WorkflowPage;
+class PerfBars;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -22,6 +23,7 @@ class QLabel;
 class QLineEdit;
 class QMediaPlayer;
 class QPushButton;
+class QSpinBox;
 class QStackedWidget;
 class QTableWidget;
 class QTextEdit;
@@ -51,6 +53,8 @@ private slots:
     void onAccCompare();
     void onHybridPropose();                     // 🧬 向导 step1：toolkit 敏感层提议
     void onHybridBuild();                       // 🧬 向导 step2：勾选层构建+板复测
+    void onDissect();                           // 🔪 rknn 文件解剖（布局/任务数/差分）
+    void onPerfGo();                            // 🚀 性能剖析（mask 矩阵+定频+分段计时）
     void onExportCompare();
     void fillLayerTable(QTableWidget *t, const QJsonArray &layers);  // 填充逐层表（5 列 sim|rt）
     void updateCompareSummary(const QJsonObject &o);  // 对比视图漏斗摘要（流式渐进刷新）
@@ -64,6 +68,7 @@ public slots:
     void autoLiveInfer(const QString &model);                      // LIVE 实时推理回归
     void autoDeploy(const QString &project, const QString &serial = {}); // 部署回归
     void autoShowWorkflow();                                       // 截图回归：切 WORKFLOW 页
+    void autoShowPerfLab();                                        // 截图回归：切 🚀 性能剖析段
 
 private:
     void buildUi();
@@ -150,6 +155,20 @@ private:
     QPushButton *m_btnHq = nullptr;            // 🧬 混合量化向导（propose 入口）
     QPushButton *m_btnBoardPerf = nullptr;     // 📡 板端 NPU 性能
     QLineEdit *m_accDevice = nullptr;          // 网络 adb 地址（IP:端口，⚖️/📡 共用）
+    QPushButton *m_btnDissect = nullptr;       // 🔪 rknn 文件解剖（用「存/导入」的 .rknn）
+    AccCompareRunner *m_dissectRunner = nullptr;
+    // 🚀 性能剖析段（实验室第 3 段）
+    QPushButton *m_segPerf = nullptr;          // 段切换按钮
+    QLineEdit *m_perfModelPath = nullptr;      // 被剖析的 .rknn
+    QComboBox *m_perfTarget = nullptr;         // adb 序列/IP:端口 或 root@IP(ssh)
+    QComboBox *m_perfMask = nullptr;           // mask 组合预设
+    QSpinBox *m_perfLoops = nullptr;           // 计时帧数
+    QCheckBox *m_perfFixFreq = nullptr;        // 锁 NPU/DDR 频率
+    QPushButton *m_btnPerfGo = nullptr;
+    QTextEdit *m_perfLog = nullptr;            // 进度日志
+    QTableWidget *m_perfTable = nullptr;       // 结果表（mask×set/run/get/e2e/fps）
+    PerfBars *m_perfBars = nullptr;            // 瀑布图
+    AccCompareRunner *m_perfRunner = nullptr;
     AccCompareRunner *m_compare = nullptr;
     AccCompareRunner *m_hqRunner = nullptr;    // 🧬 向导专用（两段复用）
     RknnSimRunner *m_rknn = nullptr;

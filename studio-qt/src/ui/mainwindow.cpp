@@ -13,9 +13,11 @@
 #include "core/rknnsimrunner.h"
 #include "ui/workflowpage.h"
 #include "ui/widgets/previewwidget.h"
+#include "ui/widgets/perfbars.h"
 
 #include <QButtonGroup>
 #include <QBuffer>
+#include <QSpinBox>
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
@@ -690,12 +692,17 @@ void MainWindow::buildUi() {
     m_segSim = new QPushButton(QStringLiteral("🧩 模拟量化 / 板端验证"));
     m_segSim->setObjectName("NavTab");
     m_segSim->setCheckable(true);
+    m_segPerf = new QPushButton(QStringLiteral("🚀 性能剖析"));
+    m_segPerf->setObjectName("NavTab");
+    m_segPerf->setCheckable(true);
     auto *segGroup = new QButtonGroup(this);
     segGroup->setExclusive(true);
     segGroup->addButton(m_segInfer);
     segGroup->addButton(m_segSim);
+    segGroup->addButton(m_segPerf);
     segRow->addWidget(m_segInfer);
     segRow->addWidget(m_segSim);
+    segRow->addWidget(m_segPerf);
     segRow->addStretch();
     labOuter->addLayout(segRow);
     m_labStack = new QStackedWidget;
@@ -795,6 +802,7 @@ void MainWindow::buildUi() {
     connect(m_navWorkflow, &QPushButton::clicked, this, [this] { m_views->setCurrentIndex(2); });
     connect(m_segInfer, &QPushButton::clicked, this, [this] { m_labStack->setCurrentIndex(0); });
     connect(m_segSim, &QPushButton::clicked, this, [this] { m_labStack->setCurrentIndex(1); });
+    connect(m_segPerf, &QPushButton::clicked, this, [this] { m_labStack->setCurrentIndex(2); });
 
     // ---- 页 2：RKNN LAB 模拟推理（toolkit2 模拟器：ONNX+转换配置 → build → 模拟） ----
     auto *pageRknn = new QWidget;
@@ -894,6 +902,11 @@ void MainWindow::buildUi() {
     m_btnBoardPerf = new QPushButton(QStringLiteral("📡 板端性能（NPU 真测，需板在线，用「存/导入」里的 .rknn）"));
     rkL->addWidget(m_btnBoardPerf);
     connect(m_btnBoardPerf, &QPushButton::clicked, this, &MainWindow::onBoardPerf);
+    m_btnDissect = new QPushButton(QStringLiteral("🔪 模型解剖（.rknn 文件布局 / 任务表——「存/导入」里的 .rknn）"));
+    m_btnDissect->setToolTip(QStringLiteral("离线解析 .rknn 容器：RKNN 头/任务表/regcmd 流四段布局、任务数、"
+                                            "目标芯片；两个模型对比时附字节差分（混合量化改了什么一目了然）"));
+    rkL->addWidget(m_btnDissect);
+    connect(m_btnDissect, &QPushButton::clicked, this, &MainWindow::onDissect);
     rleft->addStretch();
 
     auto *rright = new QVBoxLayout;
@@ -1063,6 +1076,120 @@ void MainWindow::buildUi() {
     auto *statusTimer = new QTimer(this);
     connect(statusTimer, &QTimer::timeout, this, &MainWindow::refreshStatus);
     statusTimer->start(5000);
+
+    // ---- 实验室第 3 段：🚀 性能剖析（拉满实验产品化：mask 矩阵+定频+分段计时）----
+    auto *pagePerf = new QWidget;
+    m_labStack->addWidget(pagePerf);                  // labStack index 2
+    {
+        auto *pbody = new QHBoxLayout(pagePerf);
+        pbody->setContentsMargins(14, 14, 14, 14);
+        pbody->setSpacing(14);
+        auto *pleft = new QVBoxLayout;
+        pleft->setSpacing(12);
+        pbody->addLayout(pleft, 0);
+        pbody->setStretch(0, 0);
+        pbody->setStretch(1, 1);
+
+        QVBoxLayout *pcL;
+        makeCard(pleft, &pcL, QStringLiteral("性能剖析（NPU 拉满实测）"));
+        auto *pmRow = new QHBoxLayout;
+        pmRow->setSpacing(6);
+        m_perfModelPath = new QLineEdit;
+        m_perfModelPath->setPlaceholderText(QStringLiteral("被剖析的 .rknn（默认取「存/导入」）"));
+        pmRow->addWidget(m_perfModelPath, 1);
+        auto *pmBtn = new QPushButton(QStringLiteral("…"));
+        pmBtn->setFixedWidth(34);
+        pmRow->addWidget(pmBtn);
+        pcL->addLayout(pmRow);
+        connect(pmBtn, &QPushButton::clicked, this, [this] {
+            const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("选择 .rknn"),
+                                                           QString(), QStringLiteral("RKNN 模型 (*.rknn)"));
+            if (!f.isEmpty()) m_perfModelPath->setText(f);
+        });
+        auto *ptRow = new QHBoxLayout;
+        ptRow->setSpacing(6);
+        ptRow->addWidget(new QLabel(QStringLiteral("目标板")));
+        m_perfTarget = new QComboBox;
+        m_perfTarget->setEditable(true);
+        m_perfTarget->setToolTip(QStringLiteral("adb 序列/IP:端口（Android 或 Debian-root-adb 板）；"
+                                                "root@IP 走 ssh（Debian，需免密 key）"));
+        const QString accDev = m_accDevice ? m_accDevice->text().trimmed() : QString();
+        if (!accDev.isEmpty()) m_perfTarget->addItem(accDev);
+        m_perfTarget->addItem(QStringLiteral("192.168.3.109:5555"), QStringLiteral("3588 Debian"));
+        m_perfTarget->addItem(QStringLiteral("192.168.3.163:5555"), QStringLiteral("3576 Android"));
+        ptRow->addWidget(m_perfTarget, 1);
+        pcL->addLayout(ptRow);
+        auto *mkRow = new QHBoxLayout;
+        mkRow->setSpacing(6);
+        mkRow->addWidget(new QLabel(QStringLiteral("core_mask")));
+        m_perfMask = new QComboBox;
+        m_perfMask->setToolTip(QStringLiteral("NPU 核组合：单核=最快基线；多核=单模型切分"
+                                              "（两代板实测切分都未必更快，跑了才知道）"));
+        m_perfMask->addItem(QStringLiteral("单核 NPU0（0x1）"), QStringLiteral("1"));
+        m_perfMask->addItem(QStringLiteral("单核 vs 三核（0x1,0x7）"), QStringLiteral("1,7"));
+        m_perfMask->addItem(QStringLiteral("单核0 vs 单核1（0x1,0x2）"), QStringLiteral("1,2"));
+        m_perfMask->addItem(QStringLiteral("单核 vs 双核（0x1,0x3）"), QStringLiteral("1,3"));
+        m_perfMask->addItem(QStringLiteral("全矩阵（0x1,0x2,0x3,0x7）"), QStringLiteral("1,2,3,7"));
+        mkRow->addWidget(m_perfMask, 1);
+        pcL->addLayout(mkRow);
+        auto *plRow = new QHBoxLayout;
+        plRow->setSpacing(6);
+        plRow->addWidget(new QLabel(QStringLiteral("帧数")));
+        m_perfLoops = new QSpinBox;
+        m_perfLoops->setRange(10, 500);
+        m_perfLoops->setValue(30);
+        m_perfLoops->setSingleStep(10);
+        m_perfLoops->setFixedWidth(72);
+        m_perfLoops->setAlignment(Qt::AlignCenter);
+        plRow->addWidget(m_perfLoops);
+        plRow->addStretch();
+        m_perfFixFreq = new QCheckBox(QStringLiteral("锁 NPU/DDR 频率"));
+        m_perfFixFreq->setChecked(true);
+        m_perfFixFreq->setToolTip(QStringLiteral("devfreq governor → performance（跑完自动恢复）——"
+                                                 "不定频数据会混入降频帧"));
+        plRow->addWidget(m_perfFixFreq);
+        pcL->addLayout(plRow);
+        m_btnPerfGo = new QPushButton(QStringLiteral("🚀 跑（部署 perf_run → 锁频 → 分段计时）"));
+        m_btnPerfGo->setObjectName("Primary");
+        pcL->addWidget(m_btnPerfGo);
+        connect(m_btnPerfGo, &QPushButton::clicked, this, &MainWindow::onPerfGo);
+        auto *pHint = new QLabel(QStringLiteral(
+            "每帧成本拆三段：set=输入归一化税，run=纯 NPU 执行（架构对比看这个），get=输出回传税。"
+            "预热 5 帧后取均值；perf_run 首次自动部署（Android=NDK 预编，Debian=板上 gcc）。"));
+        pHint->setWordWrap(true);
+        pcL->addWidget(pHint);
+        pleft->addStretch();
+
+        auto *pright = new QVBoxLayout;
+        pright->setSpacing(8);
+        pbody->addLayout(pright, 1);
+        auto *barTitle = new QLabel(QStringLiteral("分段瀑布（ms，宽度∝耗时）"));
+        barTitle->setObjectName("CardTitle");
+        pright->addWidget(barTitle);
+        auto *barScroll = new QScrollArea;
+        barScroll->setWidgetResizable(true);
+        barScroll->setFrameShape(QFrame::NoFrame);
+        barScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_perfBars = new PerfBars;
+        barScroll->setWidget(m_perfBars);
+        barScroll->setMinimumHeight(120);
+        pright->addWidget(barScroll, 0);
+        m_perfTable = new QTableWidget(0, 6);
+        m_perfTable->setHorizontalHeaderLabels({QStringLiteral("core_mask"),
+                                                QStringLiteral("set 归一化"),
+                                                QStringLiteral("run 纯NPU"),
+                                                QStringLiteral("get 回传"),
+                                                QStringLiteral("e2e"),
+                                                QStringLiteral("fps")});
+        m_perfTable->horizontalHeader()->setStretchLastSection(true);
+        m_perfTable->setAlternatingRowColors(true);
+        pright->addWidget(m_perfTable, 0);
+        m_perfLog = new QTextEdit;
+        m_perfLog->setReadOnly(true);
+        m_perfLog->setFont(QFont(QStringLiteral("Consolas")));
+        m_perfLog->setPlaceholderText(QStringLiteral("进度日志：连接板 → 部署 perf_run → 锁频 → 逐 mask 计时…"));
+        pright->addWidget(m_perfLog, 1);
+    }
 
     // ---- 页 3：WORKFLOW 工作流配置器（表单 → pipeline.json → 部署链）----
     // 最后 addWidget：页面栈顺序 LIVE/ONNX/RKNN/WORKFLOW
@@ -1425,6 +1552,13 @@ void MainWindow::autoShowWorkflow() {
     m_navWorkflow->setChecked(true);
 }
 
+void MainWindow::autoShowPerfLab() {
+    m_views->setCurrentIndex(1);               // 截图回归：模型实验室 → 🚀 性能剖析段
+    m_navLab->setChecked(true);
+    m_labStack->setCurrentIndex(2);
+    m_segPerf->setChecked(true);
+}
+
 void MainWindow::autoLiveInfer(const QString &model) {
     m_views->setCurrentIndex(0);               // 回 LIVE 页
     m_navLive->setChecked(true);
@@ -1622,6 +1756,153 @@ void MainWindow::onHybridBuild() {
     m_hqRunner->startRaw(QStringLiteral("Ubuntu-22.04"),
         OnnxRunner::toWslPath(QString::fromUtf8(RVS_TOOLS_DIR) +
                               QStringLiteral("/hybrid_quant.py")), args);
+}
+
+// 🔪 rknn 文件解剖：离线解析容器布局（RKNN 头/节头/任务表/regcmd 四段+任务数+target）
+void MainWindow::onDissect() {
+    if (!m_dissectRunner) {
+        m_dissectRunner = new AccCompareRunner(this);
+        connect(m_dissectRunner, &AccCompareRunner::finished, this,
+                [this](bool ok, const QString &json, const QString &err) {
+            if (!ok) {
+                appendLog(QStringLiteral("🔪 解剖失败: %1").arg(err), "#ff6b6b");
+                return;
+            }
+            const QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
+            QDialog dlg(this);
+            dlg.setWindowTitle(QStringLiteral("🔪 %1 解剖").arg(o.value(QStringLiteral("model")).toString()));
+            dlg.resize(680, 540);
+            auto *v = new QVBoxLayout(&dlg);
+            auto *nums = new QLabel;
+            nums->setWordWrap(true);
+            nums->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            const double size = o.value(QStringLiteral("size")).toDouble();
+            const int nTasks = o.value(QStringLiteral("n_tasks")).toInt(-1);
+            nums->setText(QStringLiteral(
+                "<b>大小</b> %1 B（%.2f MB）　<b>target</b> %2　<b>任务数</b> %3　<b>权重+regcmd 占比</b> %4%")
+                .arg(QString::number(size), QString::number(size / 1e6, 'f', 2))
+                .arg(o.value(QStringLiteral("target")).toString(QStringLiteral("?")))
+                .arg(nTasks < 0 ? QStringLiteral("未解析到节头") : QString::number(nTasks))
+                .arg(QString::number(o.value(QStringLiteral("weight_ratio")).toDouble() * 100, 'f', 1)));
+            v->addWidget(nums);
+            auto *t = new QTableWidget(0, 4);
+            t->setHorizontalHeaderLabels({QStringLiteral("布局段"), QStringLiteral("偏移范围"),
+                                          QStringLiteral("大小"), QStringLiteral("占比")});
+            t->horizontalHeader()->setStretchLastSection(true);
+            t->setAlternatingRowColors(true);
+            const QJsonArray layout = o.value(QStringLiteral("layout")).toArray();
+            for (const QJsonValue &lv : layout) {
+                const QJsonObject seg = lv.toObject();
+                const qint64 s = seg.value(QStringLiteral("start")).toInteger();
+                const qint64 e = seg.value(QStringLiteral("end")).toInteger();
+                const int row = t->rowCount();
+                t->insertRow(row);
+                t->setItem(row, 0, new QTableWidgetItem(seg.value(QStringLiteral("name")).toString()));
+                t->setItem(row, 1, new QTableWidgetItem(QStringLiteral("0x%1 – 0x%2")
+                    .arg(qlonglong(s), 0, 16).arg(qlonglong(e), 0, 16)));
+                t->setItem(row, 2, new QTableWidgetItem(QStringLiteral("%1 B").arg(e - s)));
+                t->setItem(row, 3, new QTableWidgetItem(size > 0
+                    ? QStringLiteral("%1%").arg((e - s) * 100.0 / size, 0, 'f', 1) : QStringLiteral("-")));
+            }
+            v->addWidget(t, 1);
+            auto *hint = new QLabel(QStringLiteral(
+                "任务表 = NPU 指令调度表（每条 40B，板上经 SUBMIT 提交执行）；regcmd 流 = 寄存器指令+权重。"
+                "依据：05-librknn编写 iotrace 板上实证（librknnrt原理与架构分析.md §4）。"));
+            hint->setWordWrap(true);
+            v->addWidget(hint);
+            auto *btn = new QPushButton(QStringLiteral("关闭"));
+            connect(btn, &QPushButton::clicked, &dlg, &QDialog::accept);
+            v->addWidget(btn);
+            dlg.exec();
+        });
+    }
+    if (m_dissectRunner->running()) return;
+    const QString rknn = m_rkSavePath->text().trimmed();
+    if (rknn.isEmpty()) {
+        appendLog(QStringLiteral("🔪 先在「存/导入」里选 .rknn"), "#ffb84d");
+        return;
+    }
+    appendLog(QStringLiteral("🔪 解剖 %1 …").arg(QFileInfo(rknn).fileName()));
+    m_dissectRunner->startRaw(QStringLiteral("Ubuntu-22.04"),
+        OnnxRunner::toWslPath(QString::fromUtf8(RVS_TOOLS_DIR) + QStringLiteral("/rknn_dissect.py")),
+        {OnnxRunner::toWslPath(rknn)});
+}
+
+// 🚀 性能剖析：WSL perf_probe.py 编排（连接板→部署 perf_run→锁频→mask 矩阵分段计时）
+void MainWindow::onPerfGo() {
+    if (!m_perfRunner) {
+        m_perfRunner = new AccCompareRunner(this);
+        connect(m_perfRunner, &AccCompareRunner::flowLog, this, [this](const QString &msg) {
+            m_perfLog->append(msg);
+        });
+        connect(m_perfRunner, &AccCompareRunner::finished, this,
+                [this](bool ok, const QString &json, const QString &err) {
+            if (!ok) {
+                m_perfLog->append(QStringLiteral("❌ %1").arg(err));
+                return;
+            }
+            const QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
+            const QJsonArray rows = o.value(QStringLiteral("rows")).toArray();
+            m_perfTable->setRowCount(0);
+            QVector<PerfRow> bars;
+            for (const QJsonValue &v : rows) {
+                const QJsonObject r = v.toObject();
+                const int mask = r.value(QStringLiteral("core_mask")).toInt();
+                const int row = m_perfTable->rowCount();
+                m_perfTable->insertRow(row);
+                auto setItem = [&row, this](int col, const QString &txt) {
+                    auto *it = new QTableWidgetItem(txt);
+                    it->setTextAlignment(Qt::AlignCenter);
+                    m_perfTable->setItem(row, col, it);
+                };
+                setItem(0, QStringLiteral("0x%1").arg(mask, 0, 16));
+                if (r.contains(QStringLiteral("run_ms"))) {
+                    const double s = r.value(QStringLiteral("set_ms")).toDouble();
+                    const double rn = r.value(QStringLiteral("run_ms")).toDouble();
+                    const double g = r.value(QStringLiteral("get_ms")).toDouble();
+                    setItem(1, QString::number(s, 'f', 2));
+                    setItem(2, QString::number(rn, 'f', 2));
+                    setItem(3, QString::number(g, 'f', 2));
+                    setItem(4, QString::number(r.value(QStringLiteral("e2e_ms")).toDouble(), 'f', 2));
+                    setItem(5, QString::number(r.value(QStringLiteral("fps")).toDouble(), 'f', 1));
+                    bars.append(PerfRow{mask, s, rn, g, true, {}});
+                } else {
+                    const QString why = r.value(QStringLiteral("error")).toString(QStringLiteral("无输出"));
+                    setItem(1, QStringLiteral("失败: %1").arg(why));
+                    for (int c = 2; c < 6; ++c) setItem(c, QStringLiteral("-"));
+                    bars.append(PerfRow{mask, 0, 0, 0, false, QStringLiteral("失败: %1").arg(why)});
+                }
+            }
+            m_perfBars->setRows(bars);
+            m_perfLog->append(QStringLiteral("✅ 完成，%1 行结果").arg(rows.size()));
+        });
+    }
+    if (m_perfRunner->running()) return;
+    QString model = m_perfModelPath->text().trimmed();
+    if (model.isEmpty()) model = m_rkSavePath->text().trimmed();   // 默认取「存/导入」的 .rknn
+    if (model.isEmpty()) {
+        m_perfLog->append(QStringLiteral("❌ 先选 .rknn 模型（或填「存/导入」路径）"));
+        return;
+    }
+    if (m_perfModelPath->text().trimmed().isEmpty()) m_perfModelPath->setText(model);
+    const QString target = m_perfTarget->currentText().trimmed();
+    if (target.isEmpty()) {
+        m_perfLog->append(QStringLiteral("❌ 先填目标板（adb IP:端口 或 root@IP）"));
+        return;
+    }
+    const QString masks = m_perfMask->currentData().toString();
+    m_perfTable->setRowCount(0);
+    m_perfBars->setRows({});
+    m_perfLog->clear();
+    m_perfLog->append(QStringLiteral("→ %1 @ %2　masks=%3　×%4 帧%5")
+                          .arg(QFileInfo(model).fileName(), target, masks)
+                          .arg(m_perfLoops->value())
+                          .arg(m_perfFixFreq->isChecked() ? QStringLiteral("　[锁频]") : QString()));
+    m_perfRunner->startRaw(QStringLiteral("Ubuntu-22.04"),
+        OnnxRunner::toWslPath(QString::fromUtf8(RVS_TOOLS_DIR) + QStringLiteral("/perf_probe.py")),
+        {OnnxRunner::toWslPath(model), target, masks,
+         QString::number(m_perfLoops->value()),
+         m_perfFixFreq->isChecked() ? QStringLiteral("1") : QStringLiteral("0")});
 }
 
 // ---- 七通道辅助：键名/页签名/索引 ----

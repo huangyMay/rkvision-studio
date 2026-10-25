@@ -24,3 +24,5 @@ tools/*.log
 scrcpy_relay.log
 ff_relay.log
 UPLOAD-CHANGES-PROPOSAL.md
+tools/bin/
+__pycache__/

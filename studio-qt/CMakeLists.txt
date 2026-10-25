@@ -30,6 +30,7 @@ add_executable(rvs_studio
     src/ui/mainwindow.cpp
     src/ui/workflowpage.cpp
     src/ui/widgets/previewwidget.cpp
+    src/ui/widgets/perfbars.cpp
     res/res.qrc
 )
 

@@ -84,6 +84,10 @@ int main(int argc, char *argv[]) {
     if (wfViewIdx >= 0)
         QTimer::singleShot(300, &w, [&w]() { w.autoShowWorkflow(); });
 
+    const int perfLabIdx = args.indexOf(QStringLiteral("--perflab"));
+    if (perfLabIdx >= 0)
+        QTimer::singleShot(300, &w, [&w]() { w.autoShowPerfLab(); });
+
     // 截图模式：--screenshot <out.png> —— 渲染后存盘退出（配合上面任一触发器）
     const int shotIdx = args.indexOf(QStringLiteral("--screenshot"));
     if (shotIdx >= 0 && args.size() > shotIdx + 1) {
