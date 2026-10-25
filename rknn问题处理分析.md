@@ -211,15 +211,32 @@ netsh interface ip add neighbors "以太网 2" 192.168.0.96 6C-05-D3-06-57-57
 
 一键预检脚本模式（板连接 + rknn_server 存活检查 + 死了自动重启）已内置于 `tools/acc_compare.py` 启动逻辑与 GUI；手工版见本节 ①③ 两步。
 
-### 6.3 2026-10-25 七通道实测结论：⑦ 板上 int16 是平台断点
+### 6.3 2026-10-25 七通道实测结论 + ⑦ 板上 int16 根因勘透（最小复现实验链）
 
-yolov8n 七通道全量对比实测（板 rk3576 / toolkit2+server+rt 全 2.3.2）：
+yolov8n 七通道全量对比实测（板 rk3576 / 驱动 0.9.8 / toolkit2+server+rt 全 2.3.2）：
 
 - ①~⑥ 全过：sim fp16 0.9995 / sim int8 0.9933 / sim int16 1.0 / 板 fp16 0.999 / 板 int8 0.9851（mean IoU vs ONNX）
-- ⑦ 板上 int16（w16a16i）：模型能 init、推理能跑，但 `rknn_outputs_get` 恒 `ACK_FAIL → RKNN_ERR_FAIL`（rknn_runtime.py get_outputs）。**全新重启 rknn_server 后单独复测同位置同错** → 平台限制，非流程 bug。与既往"w16a16i 在 RK3576 全 CPU 回退"结论吻合：CPU 回退路径的 int16 输出经 rknn_server 回传通道不通。
-- **连带效应**：⑦ 失败后 rknn_server 进程仍活着但连接线程楔死（`futex_wait`），同一脚本里后续板上 accuracy_analysis（板 int8/int16 逐层）全部 Traceback。遇到"板上操作连环失败但 server 进程在"→ 先 `pkill -f rknn_server` 重启再判，别急着怀疑环境。
-- 逐层（accuracy_analysis）模拟列不受影响：int8 177 层最低 sim_single 0.99398、int16 177 层 0.99998（零低余弦层）。
-- GUI 侧该失败被逐级捕获展示（⑦ 格子空 + 信息面板红字），不阻塞其余六通道——这是设计行为，不是缺陷。
+- ⑦ 板上 int16（w16a16i）：模型能 init、推理能跑，但 `rknn_outputs_get` 恒 `ACK_FAIL → RKNN_ERR_FAIL`。
+
+**根因（最小复现实验链逐步锁定，非猜测）**：
+
+| 实验 | 结果 | 排除/锁定 |
+|---|---|---|
+| mini(1 Conv+Relu)@64 int16 板推 | ✅ OK | int16 板推链路本身通 |
+| mini+ReduceSum | ✅ OK | ReduceSum 无辜 |
+| mini@640 / mini 20 层深 | ✅✅ OK | 输入尺寸、模型深度排除 |
+| yolov8n 只留 1 输出（conv/rsum/sigmoid 各试） | ❌ 全炸 | 输出数量/类型排除 |
+| yolov8n tap5%（前 11 节点） | ❌ 炸 | 坏点在最前面几层 |
+| **mini(Conv+Sigmoid)@640** | ❌ **同款 ACK_FAIL** | **Sigmoid 坐实** |
+| **mini(Conv+Concat)@640** | ❌ **同款 ACK_FAIL** | **Concat 坐实** |
+| mini Mul/Add/MaxPool | ✅ OK | 这些无辜 |
+| mini+Sigmoid + op_target Sigmoid→cpu | ❌ 仍炸 | **op_target 对 i16 不生效，无软件修法** |
+| w8a16 | config 直接拒绝 | RK3576 不支持 |
+| w4a16 全模型板推 | ✅ 跑通但仅 2 框 conf 0.35 | 4-bit 权重毁 CNN 精度，不如 int8，非出路 |
+
+**结论**：w16a16i 时 Conv 全部自动回退 CPU（build 日志 "Conv Not Support u8->i16"×120），但 **Sigmoid/Concat 仍被排上 NPU 以 i16 执行——RK3576 这代栈（驱动 0.9.8+rt 2.3.2）i16 的 NPU 算子输出回传是坏的**，任何含 Sigmoid/Concat 的 i16 模型（= 所有检测模型）板上必炸。注意与"CPU 回退路径不通"的旧假设相反：全 CPU 的模型（mini 系）输出全能拿回；坏的恰恰是留在 NPU 上的那部分。**高精度需求用板上 FP16（0.999），生产用 int8（0.9851）；板上 w16a16i 等瑞芯微修复**（可携最小复现提 issue：Conv+Sigmoid@640 + w16a16i + rk3576 即复现）。
+
+**连带效应**：⑦ 失败后 rknn_server 进程仍活着但连接线程楔死（`futex_wait`），同脚本后续板上 accuracy_analysis 全部 Traceback。遇到"板上操作连环失败但 server 进程在"→ 先 `pkill -f rknn_server` 重启再判。逐层（accuracy_analysis）模拟列不受影响：int8 177 层最低 sim_single 0.99398、int16 177 层 0.99998。GUI 侧该失败被逐级捕获展示（⑦ 格子空+红字），不阻塞其余六通道。
 
 ## 7. 方法论沉淀
 
