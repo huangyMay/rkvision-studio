@@ -124,6 +124,8 @@ private:
     QPushButton *m_btnExport = nullptr;        // 💾 导出报告
     QString m_lastCompareJson;                 // 最近一次精度分析的原始 JSON（导出用）
     QString m_cmpDumpDir;                      // 最近一次对比的标注图目录
+    QString metricRowsBuild(const QJsonObject &o) const;  // 指标总览文本（stages/match/cos → ①+六通道行）
+    QStringList m_layerLines;                  // 逐层摘要行（LAYERS 事件到达即累计，流式刷新用）
     QPushButton *m_navWorkflow = nullptr;
     WorkflowPage *m_workflow = nullptr;        // 工作流配置器页
     PreviewWidget *m_inferPreview = nullptr;   // 推理结果大屏
