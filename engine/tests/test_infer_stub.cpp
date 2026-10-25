@@ -4,6 +4,7 @@
 #include "stages/infer_rknn.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 
 #define CHECK(cond) do { \
@@ -22,7 +23,8 @@ int main() {
     std::streamoff sz0 = file_size("assets/gold/out0.bin");
     if (sz0 <= 0) {
         printf("SKIP: assets/gold/out0.bin not found (run scripts/fetch_gold.sh for the real suite)\n");
-        return 0;
+        // 77 = CTest SKIP（不伪装成通过）；CI 需要硬门禁时设 RVS_REQUIRE_GOLD=1
+        return std::getenv("RVS_REQUIRE_GOLD") ? 1 : 77;
     }
 
     PipelineSpec spec;

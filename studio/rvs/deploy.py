@@ -7,6 +7,7 @@
     <remote_root>/<name>/output/      结果（拉回本地）
 """
 import os
+import shlex
 from pathlib import Path
 
 from .pack import pack
@@ -17,30 +18,52 @@ def deploy(project_dir, adb, remote_root="/data/local/tmp/rvs",
     project_dir = Path(project_dir)
     engine_bin = Path(engine_bin) if engine_bin else _default_engine()
     librknnrt = Path(librknnrt) if librknnrt else _default_librknnrt()
+    if not engine_bin.is_file():
+        raise RuntimeError(f"未找到板端引擎: {engine_bin}（先运行 scripts/build_board.sh）")
+    if not librknnrt.is_file():
+        raise RuntimeError(f"未找到 librknnrt.so: {librknnrt}")
 
     staging = pack(project_dir)
     name = staging.name
+    q = _q(adb)
 
     adb.push(str(staging), f"{remote_root}/{name}")
     adb.push(str(engine_bin), f"{remote_root}/rvs_engine")
     adb.push(str(librknnrt), f"{remote_root}/librknnrt.so")
-    adb.shell(f"chmod +x {remote_root}/rvs_engine")
+    adb.shell(f"chmod +x {q(remote_root)}/rvs_engine")
     return staging
 
 
 def run_on_board(project_dir, adb, remote_root="/data/local/tmp/rvs",
                  engine_bin=None, librknnrt=None, timeout_s=600):
-    deploy(project_dir, adb, remote_root, engine_bin, librknnrt)
     project_dir = Path(project_dir)
-    spec_name = project_dir.name
+    # 用 pack 实际生成的目录名，而不是工程目录名：spec.name 与目录名可以不同
+    staging = deploy(project_dir, adb, remote_root, engine_bin, librknnrt)
+    name = staging.name
+    remote_project = f"{remote_root}/{name}"
+    q = _q(adb)
 
-    run_cmd = (f"cd {remote_root}/{spec_name} && "
-               f"LD_LIBRARY_PATH={remote_root} {remote_root}/rvs_engine .")
-    summary = adb.shell(run_cmd)
+    run_cmd = (f"cd {q(remote_project)} && "
+               f"LD_LIBRARY_PATH={q(remote_root)} {q(remote_root + '/rvs_engine')} .")
+    # timeout_s 之前是死参数：板上整轮推理可能远超 AdbHost 默认 30s
+    prev_timeout = getattr(adb, "timeout_s", None)
+    if prev_timeout is not None:
+        adb.timeout_s = timeout_s
+    try:
+        summary = adb.shell(run_cmd)
+    finally:
+        if prev_timeout is not None:
+            adb.timeout_s = prev_timeout
 
-    local_out = project_dir / "output"
-    adb.pull(f"{remote_root}/{spec_name}/output", str(local_out.parent / spec_name))
+    # pull 到已存在的工程目录 → 落地为 <project_dir>/output/
+    adb.pull(f"{remote_project}/output", str(project_dir))
     return summary
+
+
+def _q(adb):
+    """优先用 AdbHost.quote（shlex）；保留自定义 adb 实现的兼容性。"""
+    quote = getattr(adb, "quote", None)
+    return quote if callable(quote) else shlex.quote
 
 
 def _default_engine():

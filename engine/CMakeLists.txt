@@ -111,6 +111,8 @@ if(RVS_TARGET STREQUAL "board")
 elseif(RVS_TARGET STREQUAL "host")
     target_sources(${ENGINE_TARGET} PRIVATE stages/infer_rknn_stub.cpp)
     target_link_libraries(${ENGINE_TARGET} pthread)
+    # V4L2 格式探针（POSIX，可 host 侧编译；板上用同一份源码）
+    add_executable(v4l2_probe ../tools/v4l2_probe.cpp)
 endif()
 
 # ---- 单元测试（仅 host；plain assert + ctest）----
@@ -137,4 +139,12 @@ if(RVS_TARGET STREQUAL "host")
     rvs_test(test_judge tests/test_judge.cpp core/registry.cpp stages/judge.cpp)
     rvs_test(test_archive tests/test_archive.cpp core/registry.cpp stages/sink_archive.cpp)
     rvs_test(gold_regression tests/gold_regression.cpp core/registry.cpp stages/postprocess_yolov5.cpp)
+
+    # 挂起即失败：ctest 默认无超时，socket 缺 recv 超时时会一直等下去
+    set_tests_properties(
+        test_spec test_assemble test_executor test_source test_letterbox test_infer_stub
+        test_postprocess test_sink test_main test_mjpeg test_judge test_archive gold_regression
+        PROPERTIES TIMEOUT 60)
+    # 金固件缺失 = SKIP，而不是伪装成通过
+    set_tests_properties(gold_regression test_infer_stub PROPERTIES SKIP_RETURN_CODE 77)
 endif()

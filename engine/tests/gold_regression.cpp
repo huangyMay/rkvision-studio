@@ -2,6 +2,7 @@
 // attrs.json 缺失（板上 zp/scale 未提取）时显式 SKIP —— e2e_gold.sh 负责真正的 17 框断言。
 // 固件常量（金标准 test 图 = 1200x798，letterbox 参数已被 test_letterbox 钉死）。
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -27,7 +28,8 @@ int main() {
     std::ifstream af("assets/gold/attrs.json");
     if (!af.good()) {
         printf("SKIP: assets/gold/attrs.json not found (board zp/scale not extracted yet)\n");
-        return 0;
+        // 77 = CTest SKIP（不伪装成通过）；CI 需要硬门禁时设 RVS_REQUIRE_GOLD=1
+        return std::getenv("RVS_REQUIRE_GOLD") ? 1 : 77;
     }
     nlohmann::json attrs;
     try {

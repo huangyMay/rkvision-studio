@@ -105,6 +105,15 @@ int main() {
     PipelineSpec empty = make_spec({});
     CHECK_THROWS_MSG(Assemble(empty, ctx), "pipeline");
 
+    // ⑦ model.family 与后处理插件不一致 → 抛错（family 不再是"只解析不消费"的摆设）
+    PipelineSpec fam = make_spec({"fake_src", "yolov5_det", "fake_sink"});
+    fam.pipeline[0].model = "det";
+    ModelSpec ms;
+    ms.family = "yolov8-det";
+    ms.file = "models/x.rknn";
+    fam.models["det"] = ms;
+    CHECK_THROWS_MSG(Assemble(fam, ctx), "family");
+
     printf("test_assemble: all checks passed\n");
     return 0;
 }

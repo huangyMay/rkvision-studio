@@ -107,13 +107,39 @@ int Yolov5DetPost::Init(const nlohmann::json& params, const StageContext&) {
 }
 
 bool Yolov5DetPost::Process(Frame& frame) {
-    if (frame.raw_outputs.size() != 3) {
-        fprintf(stderr, "yolov5_det: expect 3 raw outputs, got %zu\n", frame.raw_outputs.size());
+    if (frame.image.empty()) {
+        fprintf(stderr, "yolov5_det: frame.image is empty\n");
+        return false;
+    }
+    if (frame.raw_outputs.size() != 3 || frame.out_zps.size() != 3 ||
+        frame.out_scales.size() != 3) {
+        fprintf(stderr, "yolov5_det: expect 3 raw outputs + 3 zp + 3 scale, got %zu/%zu/%zu\n",
+                frame.raw_outputs.size(), frame.out_zps.size(), frame.out_scales.size());
         return false;
     }
     const int model_in_w = frame.image.cols;
     const int model_in_h = frame.image.rows;
     const int n_class = (int)classes_.size();
+    if (n_class <= 0) {
+        fprintf(stderr, "yolov5_det: params.classes is empty\n");
+        return false;
+    }
+    // 张量长度必须容纳 3 anchor × (5 + n_class) × grid；否则下面的跨步索引会越界读。
+    const size_t grid[3] = {
+        (size_t)(model_in_h / 8) * (size_t)(model_in_w / 8),
+        (size_t)(model_in_h / 16) * (size_t)(model_in_w / 16),
+        (size_t)(model_in_h / 32) * (size_t)(model_in_w / 32),
+    };
+    for (int i = 0; i < 3; ++i) {
+        const size_t need = (size_t)3 * (size_t)(5 + n_class) * grid[i];
+        if (frame.raw_outputs[i].size() < need) {
+            fprintf(stderr,
+                    "yolov5_det: output[%d] too short: %zu < %zu "
+                    "(classes=%d, model=%dx%d; check params.classes against the model)\n",
+                    i, frame.raw_outputs[i].size(), need, n_class, model_in_w, model_in_h);
+            return false;
+        }
+    }
 
     std::vector<float> filterBoxes;
     std::vector<float> objProbs;

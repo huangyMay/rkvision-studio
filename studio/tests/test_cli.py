@@ -33,6 +33,20 @@ def test_pack_stages_expected_files(tmp_path):
     assert (staging / "assets" / "test_images" / "a.jpg").is_file()
 
 
+def test_pack_includes_custom_dirs_and_skips_output(tmp_path):
+    proj = make_fake_project(tmp_path)
+    (proj / "imgs").mkdir()
+    (proj / "imgs" / "a.png").write_bytes(b"PNG")
+    (proj / "output").mkdir()
+    (proj / "output" / "old.jpg").write_bytes(b"OLD")
+
+    staging = pack(proj)
+    # smoke/preview 把图放 imgs/：必须随包推上去
+    assert (staging / "imgs" / "a.png").is_file()
+    # 上一轮产物不能当输入推回板上
+    assert not (staging / "output").exists()
+
+
 class RecordingAdb(AdbHost):
     def __init__(self):
         super().__init__(bin_path="adb", serial="SER1")
@@ -84,6 +98,29 @@ def test_run_pulls_output(tmp_path):
     # shell 里必须以工程目录为 CWD 启动引擎，且 LD_LIBRARY_PATH 指向 remote_root
     shells = [c[1] for c in adb.calls if c[0] == "shell"]
     assert any("rvs_engine" in s and "helmet_gold" in s for s in shells)
+
+
+def test_run_applies_timeout(tmp_path):
+    proj = make_fake_project(tmp_path)
+    engine = tmp_path / "rvs_engine"
+    engine.write_bytes(b"ELF")
+    lib = tmp_path / "librknnrt.so"
+    lib.write_bytes(b"SO")
+
+    adb = RecordingAdb()
+    adb.timeout_s = 30
+    seen = {}
+
+    def record(cmd):
+        seen["timeout"] = adb.timeout_s
+        return ""
+
+    adb.shell = record
+
+    run_on_board(proj, adb, remote_root="/data/local/tmp/rvs",
+                 engine_bin=engine, librknnrt=lib, timeout_s=123)
+    assert seen["timeout"] == 123
+    assert adb.timeout_s == 30, "timeout must be restored after the run"
 
 
 def test_adb_timeout_raises_with_serial(tmp_path, monkeypatch):

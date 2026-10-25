@@ -74,11 +74,13 @@ bool Yolov8DetPost::Process(Frame& frame) {
         fprintf(stderr, "yolov8_det: expect 3k raw outputs, got %zu\n", n_out);
         return false;
     }
+    if (frame.out_zps.size() < n_out || frame.out_scales.size() < n_out) {
+        fprintf(stderr, "yolov8_det: zp/scale count mismatch (%zu/%zu vs %zu outputs)\n",
+                frame.out_zps.size(), frame.out_scales.size(), n_out);
+        return false;
+    }
 
     /* ===== 分层：dfl 张量（len=64*grid_len）定层，cls/obj 按同 grid_len 归层 ===== */
-    for (size_t i = 0; i < n_out; ++i)
-        fprintf(stderr, "[y8dbg] out[%zu] len=%zu zp=%d scale=%f\n", i,
-                frame.raw_outputs[i].size(), frame.out_zps[i], frame.out_scales[i]);
     struct FinalLevel {
         size_t grid_len;
         int dfl_idx = -1, cls_idx = -1, obj_idx = -1;
