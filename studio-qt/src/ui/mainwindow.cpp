@@ -172,8 +172,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         if (!img.isEmpty()) {
             // 脚本回传 WSL 路径（/mnt/c/.. 或 /tmp/..），转 Qt(Windows) 可读形态
             QString p = img;
-            if (p.startsWith(QStringLiteral("/mnt/")) && p.size() > 8)
-                p = p.mid(5, 1).toUpper() + ":/" + p.mid(8);
+            if (p.startsWith(QStringLiteral("/mnt/")) && p.size() > 7)
+                p = p.mid(5, 1).toUpper() + ":/" + p.mid(7);   // /mnt/c/.. -> C:/..（mid(7) 起是盘符后路径）
             else if (p.startsWith(QStringLiteral("/")))
                 p = QStringLiteral("//wsl.localhost/Ubuntu-22.04") + p;
             const QImage im(p);
