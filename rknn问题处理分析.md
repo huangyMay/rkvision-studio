@@ -260,12 +260,19 @@ int16 模型 load/init 全正常，输入同步完成后**第一条 SUBMIT（108
 | fp16 | 4/4 全对 | 0.85~0.88 | **72.9 ms/帧** | ✅ 完美 |
 | int16(w16a16i) | 0 框 | — | 6400 ms/帧 | ❌ 全废 |
 
-**int16 在 3588 上同样不可用，且与 3576 同病不同症**：板上日志
-`failed to submit!, op id: 2, op name: Conv:/model.1/conv/Conv, task number: 64, run task counter: 40`
-——NPU 任务提交失败（与 3576 的 SUBMIT 超时同族）；3588 原生路径不抛异常而是**返回常量垃圾输出**
-（min==max），6400ms≈每帧走失败慢路径。注意 RK3588 编译器把 Conv 以 i16 编上 NPU（3576 是
-Conv 回退 CPU、Sigmoid/Concat 上 NPU 挂）——**两代 RKNPU 的 i16 NPU 路径在 0.9.8 驱动栈上都是坏的**，
-结论升级：非单板问题，是这套芯片+驱动代的 w16a16i 断层。高精度选 fp16（3588 上 72.9ms 也可用）。
+**终判修正（2026-10-25 深夜，全链升级 2.5.0 决斗后）**：用户质疑"RK 不可能不支持 int16"部分正确——
+**硬件确实支持，是软件栈的 i16 支持仍在半途，且官方在积极修**。完整证据链：
+- 2.3.2 栈实测：w16a16i/w16a16i_dfp 均为 `failed to submit! Conv:/model.1` + 常量垃圾输出 + 6400ms/帧
+  （toolkit config 却 ACCEPT 这两个 dtype——编译器放行、运行时坏）；
+- toolkit 2.5.0 dtype 列表**已移除 w16a16i**（官方废弃坏路径，仅留 w16a16i_dfp）；w8a16/w4a16
+  在 2.5.0 仍明确 REJECT rk3588（w4a16 是 3576 专属）；
+- 全链升级（PC venv 2.5.0 重转 + GitHub 2026-09-30 版 librknnrt 2.5.0 推板）后：
+  **Conv 的 i16 NPU submit 问题已修**（6400ms→29.6ms），失败点前移到
+  `Concat:/model.2/Concat fallback cpu failed`（i16 输入的 Concat CPU 回退缺失）→ 仍 0 框。
+- 结论：2.3.2 坏在 Conv（NPU），2.5.0 修好 Conv 坏在 Concat（CPU 回退）——**移动中的靶子**，
+  下一版可能全通。int16@RK3588 截至 librknnrt 2.5.0：硬件无问题、软件未竣工、生产不可用；
+  高精度用 fp16（72.9ms）。复跑资产：板上 /root/rvs/{librknnrt25.so, y8n_3588_*.rknn,
+  board_run.py}；PC /tmp/tk25 venv（numpy 1.26.4+ort 1.19.2+torch 2.4.0 钉版）。
 
 **工具链记录**：① rknn_server 远程通道在 Debian 板 ERROR_PIPE——板上 server accept 后
 "Create client failed"(ret=-1/-11)，链路本身通（手动 forward 保持连接）；SDK/系统版 server 均如此，
