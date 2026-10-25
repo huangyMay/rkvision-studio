@@ -252,55 +252,60 @@ def main():
             log(f"{label} 失败: {str(e)[:120]}")
             emit_stage(key)
 
-    # ---------- 逐层精度（int8/int16 各跑 accuracy_analysis：模拟器必跑，板在线加跑板端） ----------
+    # ---------- 逐层精度（按通道出数：fp16/int8/int16 模拟各自一张表；板上另出 rt 表） ----------
+    # 顺序原则：模拟全先跑（稳）；板上按 int8 → fp16 → int16 排，int16 板上已知平台断点放最后，
+    # 避免它的 ACK_FAIL 楔死 rknn_server 殃及后面的板上分析
     if dump_dir and dataset:
         from rknn_acc import parse_error_analysis
         acc_dir = os.path.join(dump_dir, "acc")
         inputs = [image_path]
-        acc_specs = [("int8", None), ("int16", "w16a16i")]
-        for qname, dtype in acc_specs:
-            layers = []
-            # 模拟器列
+
+        def emit_layers(ch, layers, col_kind):
+            for l in layers:                          # 只留本通道相关的列，瘦身
+                if col_kind == "sim":
+                    l.pop("rt_entire_cos", None), l.pop("rt_single_cos", None)
+                else:
+                    for k in ("sim_entire_cos", "sim_single_cos", "sim_entire_euc",
+                              "sim_single_euc", "rt_entire_euc", "rt_single_euc"):
+                        l.pop(k, None)
+            report["layers"][ch] = layers
+            cosk = "sim_single_cos" if col_kind == "sim" else "rt_single_cos"
+            vals = [l.get(cosk, 1) for l in layers if l.get(cosk) is not None]
+            lows = [v for v in vals if v < 0.99]
+            log(f"逐层·{ch}: {len(layers)} 层 · 最低 {cosk} "
+                f"{min(vals, default=1.0):.5f} · 低余弦 {len(lows)} 层")
+            print("LAYERS " + json.dumps({"ch": ch, "kind": col_kind, "layers": layers},
+                                         ensure_ascii=False), flush=True)
+
+        def acc_once(quant, dtype, out_sub, target, device_id):
+            rk = build_rknn(onnx_path, quant, dataset, mean, std, quant_dtype=dtype)
+            rk.accuracy_analysis(inputs=inputs, output_dir=os.path.join(acc_dir, out_sub),
+                                 target=target, device_id=device_id)
             try:
-                rk = build_rknn(onnx_path, True, dataset, mean, std, quant_dtype=dtype)
-                rk.accuracy_analysis(inputs=inputs, output_dir=os.path.join(acc_dir, "sim_" + qname),
-                                     target=None)
-                layers = parse_error_analysis(os.path.join(acc_dir, "sim_" + qname,
-                                                           "error_analysis.txt"))
-                try:
-                    rk.release()
-                except Exception:
-                    pass
+                rk.release()
+            except Exception:
+                pass
+            return parse_error_analysis(os.path.join(acc_dir, out_sub, "error_analysis.txt"))
+
+        # 模拟三连（②③④）：fp16 也做（量化=关，测 fp16 舍入误差）
+        for ch, quant, dtype, sub in [
+                ("2_sim_fp16", False, None, "sim_fp16"),
+                ("3_sim_int8", True, None, "sim_int8"),
+                ("4_sim_int16", True, "w16a16i", "sim_int16")]:
+            try:
+                emit_layers(ch, acc_once(quant, dtype, sub, None, None), "sim")
             except Exception as e:  # noqa: BLE001
-                log(f"逐层·模拟{qname} 失败: {str(e)[:100]}")
-            # 板端列（追加 runtime 列）
-            if device and layers:
+                log(f"逐层·{ch} 失败: {str(e)[:100]}")
+        # 板上三连（⑥⑤⑦）：int8 最重要先跑；int16 已知断点殿后
+        if device:
+            for ch, quant, dtype, sub in [
+                    ("6_board_int8", True, None, "board_int8"),
+                    ("5_board_fp16", False, None, "board_fp16"),
+                    ("7_board_int16", True, "w16a16i", "board_int16")]:
                 try:
-                    rk = build_rknn(onnx_path, True, dataset, mean, std, quant_dtype=dtype)
-                    rk.accuracy_analysis(inputs=inputs,
-                                         output_dir=os.path.join(acc_dir, "board_" + qname),
-                                         target="rk3576", device_id=device)
-                    bll = parse_error_analysis(os.path.join(acc_dir, "board_" + qname,
-                                                            "error_analysis.txt"))
-                    bmap = {l["name"]: l for l in bll}
-                    for l in layers:
-                        b = bmap.get(l["name"])
-                        if b:
-                            l["rt_entire_cos"] = b.get("rt_entire_cos", -1)
-                            l["rt_single_cos"] = b.get("rt_single_cos", -1)
-                    try:
-                        rk.release()
-                    except Exception:
-                        pass
+                    emit_layers(ch, acc_once(quant, dtype, sub, "rk3576", device), "rt")
                 except Exception as e:  # noqa: BLE001
-                    log(f"逐层·板{qname} 失败: {str(e)[:100]}")
-            if layers:
-                report["layers"][qname] = layers
-                lows = [l for l in layers if l.get("sim_single_cos", 1) < 0.99]
-                log(f"逐层·{qname}: {len(layers)} 层 · 最低 sim_single "
-                    f"{min((l['sim_single_cos'] for l in layers if 'sim_single_cos' in l), default=1.0):.5f}"
-                    f" · 低余弦 {len(lows)} 层")
-                print("LAYERS " + json.dumps({qname: layers}, ensure_ascii=False), flush=True)
+                    log(f"逐层·{ch} 失败: {str(e)[:100]}")
 
     report["total_ms"] = round((time.time() - t_all) * 1000, 1)
 

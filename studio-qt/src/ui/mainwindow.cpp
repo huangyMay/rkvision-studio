@@ -201,42 +201,33 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                                       sts.value("error").toString().toHtmlEscaped()));
         else if (sts.contains(QStringLiteral("skipped")))
             m_cmpLog->append(QStringLiteral("%1 —— 未连板，跳过").arg(st.toHtmlEscaped()));
-        // 数据面板同步点亮：STAGE 载荷携带全量 stages/match/cosine，逐级重写指标行
-        if (st != QStringLiteral("1_onnx"))
-            m_metricText->setPlainText(metricRowsBuild(o) + m_layerLines.join(QLatin1Char('\n')));
+        // 数据面板同步点亮：该通道页签的总体指标立即刷新
+        refreshChanLabel(chanIndex(st), o);
     });
     connect(m_compare, &AccCompareRunner::layersUpdate, this, [this](const QString &json) {
-        // dict 形态 {"int8": [...], "int16": [...]}，逐层即时填进数据面板两个 tab
-        const QJsonObject byQ = QJsonDocument::fromJson(json.toUtf8()).object();
-        const QJsonArray a8 = byQ.value(QStringLiteral("int8")).toArray();
-        const QJsonArray a16 = byQ.value(QStringLiteral("int16")).toArray();
-        auto summarize = [](const QString &q, const QJsonArray &arr, QStringList *lines) {
-            double mn = 2.0;
-            int lows = 0;
-            for (const QJsonValue &v : arr) {
-                const double ss = v.toObject().value(QStringLiteral("sim_single_cos")).toDouble(1.0);
-                mn = qMin(mn, ss);
-                if (ss < 0.99) ++lows;
-            }
-            const QString line = QStringLiteral("逐层·%1: %2 层 · 最低 sim_single %3 · 低余弦 %4 层")
-                                     .arg(q).arg(arr.size()).arg(mn, 0, 'f', 5).arg(lows);
-            for (int i = lines->size() - 1; i >= 0; --i)
-                if (lines->at(i).startsWith(QStringLiteral("逐层·") + q + QLatin1Char(':')))
-                    lines->removeAt(i);
-            lines->append(line);
-        };
-        if (!a8.isEmpty()) {
-            fillLayerTable(m_tabInt8, a8);
-            summarize(QStringLiteral("int8"), a8, &m_layerLines);
+        // {"ch": 通道键, "kind": "sim|rt", "layers": [...]} —— 填进对应通道页签
+        const QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
+        const int idx = chanIndex(o.value(QStringLiteral("ch")).toString());
+        const QJsonArray layers = o.value(QStringLiteral("layers")).toArray();
+        if (idx < 0 || layers.isEmpty()) return;
+        fillLayerTable(m_chanTable[idx], layers);
+        // 逐层摘要追加到该通道总体指标下（保留已有行，幂等替换）
+        const bool sim = layers.first().toObject().contains(QStringLiteral("sim_entire_cos"));
+        const QString cosk = sim ? QStringLiteral("sim_single_cos")
+                                 : QStringLiteral("rt_single_cos");
+        double mn = 2.0;
+        int lows = 0;
+        for (const QJsonValue &v : layers) {
+            const double ss = v.toObject().value(cosk).toDouble(1.0);
+            mn = qMin(mn, ss);
+            if (ss < 0.99) ++lows;
         }
-        if (!a16.isEmpty()) {
-            fillLayerTable(m_tabInt16, a16);
-            summarize(QStringLiteral("int16"), a16, &m_layerLines);
-        }
-        // 指标区末尾追加逐层摘要（用最近一次 stage 载荷重建行——m_lastStagePayload 兜底直接拼行）
-        m_metricText->setPlainText(m_metricText->toPlainText().remove(QRegularExpression(
-                                       QStringLiteral("^逐层·.*$"), QRegularExpression::MultilineOption))
-                                       .append(m_layerLines.join(QLatin1Char('\n'))));
+        QString base = m_chanLabel[idx]->text();
+        base.remove(QRegularExpression(QStringLiteral("^逐层: .*$"),
+                                       QRegularExpression::MultilineOption));
+        m_chanLabel[idx]->setText(base.trimmed() + QStringLiteral("\n逐层: %1 层 · 最低 %2 %3 · 低于0.99 %4 层")
+                                      .arg(layers.size()).arg(sim ? "sim" : "rt")
+                                      .arg(mn, 0, 'f', 5).arg(lows));
     });
     connect(m_compare, &AccCompareRunner::finished, this, [this](bool ok, const QString &json,
                                                                  const QString &err) {
@@ -914,30 +905,29 @@ void MainWindow::buildUi() {
            QStringLiteral("⑦ 板上 int16"));
     m_cmpViewStack->addWidget(imgPanel);              // m_cmpViewStack index 1
 
-    // 视图 1：数据面板（四栏指标 + 逐层双表）
+    // 视图 2：数据面板（七通道页签——与图片面板一一对应：每通道总体指标 + 自己的逐层表）
     auto *dataPanel = new QWidget;
     auto *dv = new QVBoxLayout(dataPanel);
     dv->setContentsMargins(0, 0, 0, 0);
     dv->setSpacing(6);
-    m_metricText = new QTextEdit;
-    m_metricText->setReadOnly(true);
-    QFont monoF(QStringLiteral("Consolas"));
-    monoF.setStyleHint(QFont::Monospace);
-    m_metricText->setFont(monoF);
-    m_metricText->setPlaceholderText(QStringLiteral("跑完 ⚖️ 后此处显示七通道指标总览"));
-    m_metricText->setMaximumHeight(220);
-    dv->addWidget(m_metricText);
-    auto *layerTabs = new QTabWidget;
-    auto mkTab = [&layerTabs](QTableWidget **t, const QString &title) {
-        *t = new QTableWidget(0, 5);
-        (*t)->setHorizontalHeaderLabels({QStringLiteral("层"), QStringLiteral("sim entire"),
-                                         QStringLiteral("sim single"),
-                                         QStringLiteral("rt entire"), QStringLiteral("rt single")});
-        layerTabs->addTab(*t, title);
-    };
-    mkTab(&m_tabInt8, QStringLiteral("逐层 · int8"));
-    mkTab(&m_tabInt16, QStringLiteral("逐层 · int16"));
-    dv->addWidget(layerTabs, 1);
+    auto *chanTabs = new QTabWidget;
+    for (int i = 0; i < 7; ++i) {
+        auto *page = new QWidget;
+        auto *pl = new QVBoxLayout(page);
+        pl->setContentsMargins(0, 4, 0, 0);
+        pl->setSpacing(4);
+        m_chanLabel[i] = new QLabel(QStringLiteral("排队中…"));
+        m_chanLabel[i]->setWordWrap(true);
+        m_chanLabel[i]->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        pl->addWidget(m_chanLabel[i]);
+        m_chanTable[i] = new QTableWidget(0, 3);
+        m_chanTable[i]->setHorizontalHeaderLabels(
+            {QStringLiteral("层"), QStringLiteral("entire cos"), QStringLiteral("single cos")});
+        m_chanTable[i]->setAlternatingRowColors(true);
+        pl->addWidget(m_chanTable[i], 1);
+        chanTabs->addTab(page, chanName(i));
+    }
+    dv->addWidget(chanTabs, 1);
     m_cmpViewStack->addWidget(dataPanel);             // m_cmpViewStack index 2
 
     connect(m_btnExport, &QPushButton::clicked, this, &MainWindow::onExportCompare);
@@ -1401,10 +1391,11 @@ void MainWindow::onAccCompare() {
     m_labStack->setCurrentIndex(1);
     m_cmpViewStack->setCurrentIndex(0);
     m_cmpLog->clear();
-    m_metricText->clear();
-    m_layerLines.clear();
-    m_tabInt8->setRowCount(0);
-    m_tabInt16->setRowCount(0);
+    for (int i = 0; i < 7; ++i) {
+        m_chanLabel[i]->setText(i == 0 ? QStringLiteral("推理中…")
+                                       : QStringLiteral("排队中…"));
+        m_chanTable[i]->setRowCount(0);
+    }
     m_imgOnnx->setPlaceholder(QStringLiteral("① ONNX 推理中…"));
     m_imgSimFp16->setPlaceholder(QStringLiteral("② 构建中…"));
     m_imgSimInt8->setPlaceholder(QStringLiteral("③ 排队中…"));
@@ -1425,124 +1416,106 @@ void MainWindow::onAccCompare() {
                      dumpWin);
 }
 
-// 指标总览文本：①+六通道行（stages 缺键=排队中；skipped/error 如实标注）——流式与最终共用
-QString MainWindow::metricRowsBuild(const QJsonObject &o) const {
-    const QJsonObject stages = o.value("stages").toObject();
-    const QJsonObject match = o.value("match").toObject();
-    const QJsonObject tcos = o.value("tensor_cosine").toObject();
-    auto nOf = [&stages](const QString &k) {
-        return stages.value(k).toObject().value("n").toInt(-1);
-    };
-    auto miouOf = [&match](const QString &k) {
-        return match.value(k).toObject().value("mean_iou").toDouble(-1);
-    };
-    auto dropOf = [&match](const QString &k) {
-        const QJsonArray drops = match.value(k).toObject().value("conf_drops").toArray();
-        if (drops.isEmpty()) return 0.0;
-        double s = 0;
-        for (const QJsonValue &v : drops) s += v.toDouble();
-        return s / drops.size();
-    };
-    auto cosAvg = [&tcos](const QString &k) {
-        const QJsonArray a = tcos.value(k).toArray();
-        if (a.isEmpty()) return 0.0;
-        double s = 0;
-        for (const QJsonValue &v : a) s += v.toDouble();
-        return s / a.size();
-    };
-    QString txt = QStringLiteral("%1  %2  %3  %4  %5\n")
-                      .arg(QStringLiteral("通道"), -16)
-                      .arg(QStringLiteral("检出"), 4).arg(QStringLiteral("mean_IoU"), 9)
-                      .arg(QStringLiteral("conf掉点"), 9)
-                      .arg(QStringLiteral("张量余弦"), 10);
-    txt += QStringLiteral("%1  %2  %3  %4  %5\n")
-               .arg(QStringLiteral("① ONNX float32"), -16)
-               .arg(nOf("1_onnx"), 4).arg(QStringLiteral("—"), 9)
-               .arg(QStringLiteral("—"), 9).arg(QStringLiteral("基准"), 10);
-    struct Chan { const char *key, *tag; };
-    const Chan chans[] = {
-        {"2_sim_fp16", "② FP16 模拟"},   {"3_sim_int8", "③ int8 模拟"},
-        {"4_sim_int16", "④ int16 模拟"}, {"5_board_fp16", "⑤ 板上 FP16"},
-        {"6_board_int8", "⑥ 板上 int8"}, {"7_board_int16", "⑦ 板上 int16"},
-    };
-    for (const Chan &c : chans) {
-        const QString k = QString::fromLatin1(c.key);
-        const QJsonObject st = stages.value(k).toObject();
-        if (st.isEmpty()) {          // 该级还没跑到（流式期间）
-            txt += QStringLiteral("%1  %2\n").arg(QString::fromLatin1(c.tag), -16)
-                       .arg(QStringLiteral("排队中…"));
-            continue;
-        }
-        if (st.contains(QStringLiteral("skipped"))) {
-            txt += QStringLiteral("%1  %2\n").arg(QString::fromLatin1(c.tag), -16)
-                       .arg(QStringLiteral("未连板，跳过"));
-            continue;
-        }
-        if (st.contains(QStringLiteral("error"))) {
-            txt += QStringLiteral("%1  %2\n").arg(QString::fromLatin1(c.tag), -16)
-                       .arg(QStringLiteral("失败: ") + st.value("error").toString().left(28));
-            continue;
-        }
-        txt += QStringLiteral("%1  %2  %3  %4  %5\n")
-                   .arg(QString::fromLatin1(c.tag), -16)
-                   .arg(nOf(k), 4)
-                   .arg(miouOf(k + QStringLiteral("_vs_1")), 9, 'f', 4)
-                   .arg(dropOf(k + QStringLiteral("_vs_1")), 9, 'f', 4)
-                   .arg(cosAvg(k + QStringLiteral("_vs_1")), 10, 'f', 5);
-    }
-    return txt;
+// ---- 七通道辅助：键名/页签名/索引 ----
+static const struct { const char *key, *tag; } kChans[7] = {
+    {"1_onnx", "① ONNX 基线"},     {"2_sim_fp16", "② FP16 模拟"},
+    {"3_sim_int8", "③ int8 模拟"}, {"4_sim_int16", "④ int16 模拟"},
+    {"5_board_fp16", "⑤ 板上 FP16"}, {"6_board_int8", "⑥ 板上 int8"},
+    {"7_board_int16", "⑦ 板上 int16"},
+};
+int MainWindow::chanIndex(const QString &stageKey) {
+    for (int i = 0; i < 7; ++i)
+        if (stageKey == QLatin1String(kChans[i].key)) return i;
+    return -1;
+}
+QString MainWindow::chanName(int i) {
+    return (i >= 0 && i < 7) ? QString::fromUtf8(kChans[i].tag) : QString();
 }
 
-// 漏斗摘要：七通道指标总览写入数据面板 m_metricText，漏斗判读追加进信息面板；仅 finished 调用
+// 通道总体指标（写进数据面板对应页签的标签）：stages 缺键=排队；skipped/error 如实标注
+void MainWindow::refreshChanLabel(int idx, const QJsonObject &o) {
+    if (idx < 0 || idx >= 7 || !m_chanLabel[idx]) return;
+    const QString k = QString::fromLatin1(kChans[idx].key);
+    const QJsonObject st = o.value(QStringLiteral("stages")).toObject().value(k).toObject();
+    QString txt;
+    if (k == QLatin1String("1_onnx")) {
+        txt = st.contains(QStringLiteral("n"))
+                  ? QStringLiteral("float32 金标准 · 检出 %1 框\n逐层体检无意义：它就是参考答案")
+                        .arg(st.value(QStringLiteral("n")).toInt())
+                  : QStringLiteral("推理中…");
+    } else if (st.isEmpty()) {
+        txt = QStringLiteral("排队中…");
+    } else if (st.contains(QStringLiteral("skipped"))) {
+        txt = QStringLiteral("未连板，跳过（填板地址后重跑可测）");
+    } else if (st.contains(QStringLiteral("error"))) {
+        txt = QStringLiteral("失败：%1").arg(st.value(QStringLiteral("error")).toString().left(80));
+        if (k == QLatin1String("7_board_int16"))
+            txt += QStringLiteral("\n（RK3576 平台断点：Sigmoid/Concat 的 int16 NPU 输出回传不通，"
+                                  "已最小复现实证，等固件修复）");
+    } else {
+        const QString mk = k + QStringLiteral("_vs_1");   // match/cosine 键带 _vs_1 后缀
+        const QJsonArray drops = o.value(QStringLiteral("match")).toObject()
+                                     .value(mk).toObject()
+                                     .value(QStringLiteral("conf_drops")).toArray();
+        double drop = 0;
+        for (const QJsonValue &v : drops) drop += v.toDouble();
+        if (!drops.isEmpty()) drop /= drops.size();
+        const QJsonArray a = o.value(QStringLiteral("tensor_cosine")).toObject()
+                                 .value(mk).toArray();
+        double cos = 0;
+        for (const QJsonValue &v : a) cos += v.toDouble();
+        if (!a.isEmpty()) cos /= a.size();
+        txt = QStringLiteral("检出 %1 框 · mean IoU %2 · conf 掉点 %3 · 张量余弦 %4")
+                  .arg(st.value(QStringLiteral("n")).toInt())
+                  .arg(o.value(QStringLiteral("match")).toObject().value(mk).toObject()
+                           .value(QStringLiteral("mean_iou")).toDouble(), 0, 'f', 4)
+                  .arg(drop, 0, 'f', 4)
+                  .arg(cos, 0, 'f', 5);
+    }
+    // 保留 layersUpdate 追加的"逐层:"摘要行
+    QString keep = m_chanLabel[idx]->text();
+    const qsizetype p = keep.indexOf(QStringLiteral("\n逐层: "));
+    if (p >= 0) txt += keep.mid(p);
+    m_chanLabel[idx]->setText(txt);
+}
+
+// 终局汇总：刷新全部通道标签与逐层表 + 漏斗判读进信息面板；仅 finished 调用
 void MainWindow::updateCompareSummary(const QJsonObject &o) {
-    m_metricText->setPlainText(metricRowsBuild(o) + m_layerLines.join(QLatin1Char('\n')));
+    for (int i = 0; i < 7; ++i) refreshChanLabel(i, o);
+    const QJsonObject layersAll = o.value(QStringLiteral("layers")).toObject();
+    for (int i = 0; i < 7; ++i) {
+        const QJsonArray arr = layersAll.value(QString::fromLatin1(kChans[i].key)).toArray();
+        if (!arr.isEmpty()) fillLayerTable(m_chanTable[i], arr);
+    }
 
     const QJsonObject stages = o.value("stages").toObject();
-    const QJsonObject match = o.value("match").toObject();
-    const QJsonObject tcos = o.value("tensor_cosine").toObject();
     auto nOf = [&stages](const QString &k) {
         return stages.value(k).toObject().value("n").toInt(-1);
     };
-    auto miouOf = [&match](const QString &k) {
-        return match.value(k).toObject().value("mean_iou").toDouble(-1);
-    };
-    auto dropOf = [&match](const QString &k) {
-        const QJsonArray drops = match.value(k).toObject().value("conf_drops").toArray();
-        if (drops.isEmpty()) return 0.0;
-        double s = 0;
-        for (const QJsonValue &v : drops) s += v.toDouble();
-        return s / drops.size();
-    };
-    auto cosAvg = [&tcos](const QString &k) {
-        const QJsonArray a = tcos.value(k).toArray();
-        if (a.isEmpty()) return 0.0;
-        double s = 0;
-        for (const QJsonValue &v : a) s += v.toDouble();
-        return s / a.size();
-    };
-    struct Chan { const char *key, *tag; };
-    const Chan chans[] = {
-        {"2_sim_fp16", "② FP16 模拟"},   {"3_sim_int8", "③ int8 模拟"},
-        {"4_sim_int16", "④ int16 模拟"}, {"5_board_fp16", "⑤ 板上 FP16"},
-        {"6_board_int8", "⑥ 板上 int8"}, {"7_board_int16", "⑦ 板上 int16"},
-    };
-
-    // 漏斗判读（信息面板）
     QString body;
-    for (const Chan &c : chans) {
-        const QString k = QString::fromLatin1(c.key);
+    for (int i = 1; i < 7; ++i) {
+        const QString k = QString::fromLatin1(kChans[i].key);
+        const QString tag = chanName(i);
         const QJsonObject st = stages.value(k).toObject();
         if (st.contains(QStringLiteral("skipped"))) {
-            body += QStringLiteral("<br>%1 —— 未连板，跳过").arg(QString::fromLatin1(c.tag));
+            body += QStringLiteral("<br>%1 —— 未连板，跳过").arg(tag);
         } else if (st.contains(QStringLiteral("error"))) {
-            body += QStringLiteral("<br><span style='color:#ff6b6b'>%1 —— 失败（查 WSL 环境/设备）</span>")
-                        .arg(QString::fromLatin1(c.tag));
+            body += QStringLiteral("<br><span style='color:#ff6b6b'>%1 —— 失败</span>").arg(tag);
         } else {
-            const QString mk = k + QStringLiteral("_vs_1");   // match/cosine 键带 _vs_1 后缀
-            body += QStringLiteral("<br>") + QStringLiteral("%1  检出 %2 框 · mean IoU %3 · conf 掉点 %4 · 张量余弦 %5")
-                        .arg(QString::fromLatin1(c.tag), -18).arg(nOf(k))
-                        .arg(miouOf(mk), 0, 'f', 4).arg(dropOf(mk), 0, 'f', 4)
-                        .arg(cosAvg(mk), 0, 'f', 5);
+            const QString mk = k + QStringLiteral("_vs_1");
+            const QJsonObject m = o.value("match").toObject().value(mk).toObject();
+            const QJsonArray drops = m.value(QStringLiteral("conf_drops")).toArray();
+            double drop = 0;
+            for (const QJsonValue &v : drops) drop += v.toDouble();
+            if (!drops.isEmpty()) drop /= drops.size();
+            const QJsonArray a = o.value("tensor_cosine").toObject().value(mk).toArray();
+            double cos = 0;
+            for (const QJsonValue &v : a) cos += v.toDouble();
+            if (!a.isEmpty()) cos /= a.size();
+            body += QStringLiteral("<br>%1  检出 %2 框 · mean IoU %3 · conf 掉点 %4 · 张量余弦 %5")
+                        .arg(tag, -18).arg(nOf(k))
+                        .arg(m.value(QStringLiteral("mean_iou")).toDouble(), 0, 'f', 4)
+                        .arg(drop, 0, 'f', 4).arg(cos, 0, 'f', 5);
         }
     }
     body += QStringLiteral("<br><i>判读: 模拟②③④=转换+量化算法损失 · 板⑤⑥⑦再叠加运行时实现差异 · 同 dtype 下 板-模拟≈0 说明运行时无损</i>");
@@ -1554,17 +1527,21 @@ void MainWindow::updateCompareSummary(const QJsonObject &o) {
                               .arg(body));
 }
 
-// 逐层表填充：五列（层名 + sim entire/single + rt entire/single），低余弦标红
+// 逐层表填充：三列（层名 + entire/single cos）——首层带 sim_* 键则读 sim，否则读 rt；低余弦标红
 void MainWindow::fillLayerTable(QTableWidget *t, const QJsonArray &layers) {
+    const bool sim = !layers.isEmpty() &&
+                     layers.first().toObject().contains(QStringLiteral("sim_entire_cos"));
+    const QString ek = sim ? QStringLiteral("sim_entire_cos")
+                           : QStringLiteral("rt_entire_cos");
+    const QString sk = sim ? QStringLiteral("sim_single_cos")
+                           : QStringLiteral("rt_single_cos");
     t->setRowCount(0);
     int row = 0;
     for (const QJsonValue &v : layers) {
         const QJsonObject o = v.toObject();
-        const double se = o.value("sim_entire_cos").toDouble(-1);
-        const double ss = o.value("sim_single_cos").toDouble(-1);
-        const double re = o.value("rt_entire_cos").toDouble(-1);
-        const double rs = o.value("rt_single_cos").toDouble(-1);
-        if (se < 0 && ss < 0 && re < 0 && rs < 0) continue;
+        const double ent = o.value(ek).toDouble(-1);
+        const double sgl = o.value(sk).toDouble(-1);
+        if (ent < 0 && sgl < 0) continue;
         t->insertRow(row);
         auto mk = [](double val) {
             auto *it = new QTableWidgetItem(val > 0 ? QString::number(val, 'f', 5)
@@ -1574,10 +1551,8 @@ void MainWindow::fillLayerTable(QTableWidget *t, const QJsonArray &layers) {
             return it;
         };
         t->setItem(row, 0, new QTableWidgetItem(o.value("name").toString()));
-        t->setItem(row, 1, mk(se));
-        t->setItem(row, 2, mk(ss));
-        t->setItem(row, 3, mk(re));
-        t->setItem(row, 4, mk(rs));
+        t->setItem(row, 1, mk(ent));
+        t->setItem(row, 2, mk(sgl));
         ++row;
     }
     t->resizeColumnsToContents();
@@ -1624,8 +1599,9 @@ void MainWindow::onExportCompare() {
             }
         }
     };
-    dumpCsv(m_tabInt8, QStringLiteral("int8_layers"));
-    dumpCsv(m_tabInt16, QStringLiteral("int16_layers"));
+    for (int i = 0; i < 7; ++i)
+        dumpCsv(m_chanTable[i], QStringLiteral("layers_%1").arg(
+                    QString::fromLatin1(kChans[i].key)));
 
     // 3) 标注图引用清单（存在则写路径）
     QStringList refs;

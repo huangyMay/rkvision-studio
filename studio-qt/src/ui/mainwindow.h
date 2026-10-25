@@ -118,14 +118,14 @@ private:
     PreviewWidget *m_imgBdInt16 = nullptr;        // 图片面板：⑦ 板上 int16
     QStackedWidget *m_cmpViewStack = nullptr;     // 对比面板：0=信息面板 1=图片面板 2=数据面板
     QTextEdit *m_cmpLog = nullptr;                // 信息面板：操作流日志
-    QTextEdit *m_metricText = nullptr;            // 数据面板：指标总览
-    QTableWidget *m_tabInt8 = nullptr;            // 数据面板：int8 逐层
-    QTableWidget *m_tabInt16 = nullptr;           // 数据面板：int16 逐层
+    QLabel *m_chanLabel[7] = {};                  // 数据面板：各通道总体指标标签
+    QTableWidget *m_chanTable[7] = {};            // 数据面板：各通道逐层表
     QPushButton *m_btnExport = nullptr;        // 💾 导出报告
     QString m_lastCompareJson;                 // 最近一次精度分析的原始 JSON（导出用）
     QString m_cmpDumpDir;                      // 最近一次对比的标注图目录
-    QString metricRowsBuild(const QJsonObject &o) const;  // 指标总览文本（stages/match/cos → ①+六通道行）
-    QStringList m_layerLines;                  // 逐层摘要行（LAYERS 事件到达即累计，流式刷新用）
+    int chanIndex(const QString &stageKey);    // 通道键 → 0..6；未知 -1
+    QString chanName(int i);                   // 0..6 → 页签名
+    void refreshChanLabel(int idx, const QJsonObject &o);  // 通道总体指标 → 页签标签
     QPushButton *m_navWorkflow = nullptr;
     WorkflowPage *m_workflow = nullptr;        // 工作流配置器页
     PreviewWidget *m_inferPreview = nullptr;   // 推理结果大屏
