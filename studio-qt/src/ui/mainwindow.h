@@ -52,7 +52,7 @@ private slots:
     void onBoardAcc();
     void onAccCompare();
     void onExportCompare();
-    void fillLayerTables(const QJsonArray &layers);   // 填充对比视图双表（sim|runtime）
+    void fillLayerTable(QTableWidget *t, const QJsonArray &layers);  // 填充逐层表（5 列 sim|rt）
     void updateCompareSummary(const QJsonObject &o);  // 对比视图漏斗摘要（流式渐进刷新）
     void appendLog(const QString &msg, const QString &color = {});
 
@@ -112,22 +112,18 @@ private:
     QPushButton *m_navLab = nullptr;           // 模型实验室页签（合并 ONNX LAB + RKNN LAB）
     QPushButton *m_segInfer = nullptr;         // 实验室内部段：ONNX 基线
     QPushButton *m_segSim = nullptr;           // 实验室内部段：模拟量化
-    PreviewWidget *m_cmpLocalPreview = nullptr;   // 对比视图：本地 ONNX 结果图（遗留）
-    PreviewWidget *m_cmpBoardPreview = nullptr;   // 对比视图：板上结果图（遗留）
     PreviewWidget *m_imgOnnx = nullptr;           // 图片面板：① ONNX 基线
-    PreviewWidget *m_imgBoard = nullptr;          // 图片面板：③ 板上 int8
-    PreviewWidget *m_imgFp16 = nullptr;           // 图片面板：② 板上 FP16
-    PreviewWidget *m_imgFp16Sim = nullptr;        // 图片面板：④ FP16 模拟（参考）
+    PreviewWidget *m_imgSimFp16 = nullptr;        // 图片面板：② FP16 模拟
+    PreviewWidget *m_imgSimInt8 = nullptr;        // 图片面板：③ int8 模拟
+    PreviewWidget *m_imgSimInt16 = nullptr;       // 图片面板：④ int16 模拟
+    PreviewWidget *m_imgBdFp16 = nullptr;         // 图片面板：⑤ 板上 FP16
+    PreviewWidget *m_imgBdInt8 = nullptr;         // 图片面板：⑥ 板上 int8
+    PreviewWidget *m_imgBdInt16 = nullptr;        // 图片面板：⑦ 板上 int16
     QStackedWidget *m_cmpViewStack = nullptr;     // 对比面板：0=信息面板 1=图片面板 2=数据面板
     QTextEdit *m_cmpLog = nullptr;                // 信息面板：操作流日志
-    QLabel *m_metricOnnx = nullptr;               // 数据面板四栏指标
-    QLabel *m_metricFp16 = nullptr;               // ② 板上 FP16
-    QLabel *m_metricFp16Sim = nullptr;            // ③ FP16 模拟（参考）
-    QLabel *m_metricInt8 = nullptr;               // ④ 板上 int8
-    QLabel *m_metricBoard = nullptr;              // （沿用成员名；与 m_metricInt8 同值）
-    QTableWidget *m_cmpSimTable = nullptr;     // 对比视图：模拟器逐层
-    QTableWidget *m_cmpRtTable = nullptr;      // 对比视图：板端逐层
-    QLabel *m_cmpRightTitle = nullptr;
+    QTextEdit *m_metricText = nullptr;            // 数据面板：指标总览
+    QTableWidget *m_tabInt8 = nullptr;            // 数据面板：int8 逐层
+    QTableWidget *m_tabInt16 = nullptr;           // 数据面板：int16 逐层
     QPushButton *m_btnExport = nullptr;        // 💾 导出报告
     QString m_lastCompareJson;                 // 最近一次精度分析的原始 JSON（导出用）
     QString m_cmpDumpDir;                      // 最近一次对比的标注图目录

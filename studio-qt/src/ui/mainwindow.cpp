@@ -165,9 +165,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         const QString ts = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss"));
         m_cmpLog->append(QStringLiteral("<span style='color:#5a6a80'>%1</span> %2").arg(ts, msg.toHtmlEscaped()));
     });
-    // 流式：每级完成即时刷新摘要与画面（不等全跑完）
+    // 流式：每级完成即时路由到对应图片格（不等全跑完）
     connect(m_compare, &AccCompareRunner::stageUpdate, this, [this](const QString &json) {
         const QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
+        const QString st = o.value("stage").toString();
         const QString img = o.value("image").toString();
         if (!img.isEmpty()) {
             // 脚本回传 WSL 路径（/mnt/c/.. 或 /tmp/..），转 Qt(Windows) 可读形态
@@ -178,18 +179,36 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                 p = QStringLiteral("//wsl.localhost/Ubuntu-22.04") + p;
             const QImage im(p);
             if (!im.isNull()) {
-                PreviewWidget *dst = m_imgFp16Sim;
-                const QString st = o.value("stage").toString();
+                PreviewWidget *dst = nullptr;
                 if (st == QStringLiteral("1_onnx")) dst = m_imgOnnx;
-                else if (st == QStringLiteral("2_board_fp16")) dst = m_imgFp16;
-                else if (st == QStringLiteral("4_board_int16")) dst = m_imgBoard;
-                dst->setImage(im);
+                else if (st == QStringLiteral("2_sim_fp16")) dst = m_imgSimFp16;
+                else if (st == QStringLiteral("3_sim_int8")) dst = m_imgSimInt8;
+                else if (st == QStringLiteral("4_sim_int16")) dst = m_imgSimInt16;
+                else if (st == QStringLiteral("5_board_fp16")) dst = m_imgBdFp16;
+                else if (st == QStringLiteral("6_board_int8")) dst = m_imgBdInt8;
+                else if (st == QStringLiteral("7_board_int16")) dst = m_imgBdInt16;
+                if (dst) dst->setImage(im);
             }
         }
+        // 该级检测数即时进信息面板（操作流），失败/跳过也透明呈现
+        const QJsonObject sts = o.value("stages").toObject().value(st).toObject();
+        if (sts.contains(QStringLiteral("n")))
+            m_cmpLog->append(QStringLiteral("<b>%1</b> 完成 · 检出 %2 框")
+                                 .arg(st.toHtmlEscaped()).arg(sts.value("n").toInt()));
+        else if (sts.contains(QStringLiteral("error")))
+            m_cmpLog->append(QStringLiteral("<span style='color:#ff6b6b'>%1 失败: %2</span>")
+                                 .arg(st.toHtmlEscaped(),
+                                      sts.value("error").toString().toHtmlEscaped()));
+        else if (sts.contains(QStringLiteral("skipped")))
+            m_cmpLog->append(QStringLiteral("%1 —— 未连板，跳过").arg(st.toHtmlEscaped()));
     });
     connect(m_compare, &AccCompareRunner::layersUpdate, this, [this](const QString &json) {
-        fillLayerTables(QJsonDocument::fromJson(json.toUtf8()).array());
-        m_cmpRightTitle->setText(QStringLiteral("板端逐层（runtime_error）——红字=低于 0.99 验收线"));
+        // dict 形态 {"int8": [...], "int16": [...]}，逐层即时填进数据面板两个 tab
+        const QJsonObject byQ = QJsonDocument::fromJson(json.toUtf8()).object();
+        const QJsonArray a8 = byQ.value(QStringLiteral("int8")).toArray();
+        const QJsonArray a16 = byQ.value(QStringLiteral("int16")).toArray();
+        if (!a8.isEmpty()) fillLayerTable(m_tabInt8, a8);
+        if (!a16.isEmpty()) fillLayerTable(m_tabInt16, a16);
     });
     connect(m_compare, &AccCompareRunner::finished, this, [this](bool ok, const QString &json,
                                                                  const QString &err) {
@@ -239,15 +258,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         appendLog(QStringLiteral("量化精度完成: %1 层，最低 sim_single_cos=%2")
                       .arg(layers.size())
                       .arg(minSingle, 0, 'f', 5), "#3ecf72");
-        // 填充「📊 对比视图」双表（runtime 数据源）并切过去；明细文件仍可用
-        fillLayerTables(layers);
-        m_cmpRightTitle->setText(QStringLiteral(
-            "板端逐层（runtime_error）— %1 层 · 最低 %2").arg(layers.size())
-            .arg(minSingle, 0, 'f', 5));
+        // 填充数据面板 int8 逐层 tab（sim+runtime 五列）并切过去；明细文件仍可用
+        fillLayerTable(m_tabInt8, layers);
         m_views->setCurrentIndex(1);
         m_navLab->setChecked(true);
         m_labStack->setCurrentIndex(1);
         m_rkRightStack->setCurrentIndex(1);       // 精度对比面板
+        m_cmpViewStack->setCurrentIndex(2);       // 数据面板（逐层表在此）
         appendLog(QStringLiteral("逐层明细文件: %1/error_analysis.txt").arg(outDir), "#8b97a8");
         m_lastCompareJson = json;                 // 供 💾 导出（layers 数据源）
     });
@@ -931,14 +948,20 @@ void MainWindow::buildUi() {
         col->addWidget(*w, 1);
         g->addLayout(col, r, c);
     };
-    mkCell(imgGrid, &m_imgOnnx, QStringLiteral("点 ⚖️ 后生成"), 0, 0,
+    mkCell(imgGrid, &m_imgOnnx,     QStringLiteral("点 ⚖️ 后生成"), 0, 0,
            QStringLiteral("① ONNX 基线（本地）"));
-    mkCell(imgGrid, &m_imgBoard, QStringLiteral("板离线/未跑"), 0, 1,
-           QStringLiteral("③ 板上 int8"));
-    mkCell(imgGrid, &m_imgFp16, QStringLiteral("板离线/未跑"), 1, 0,
-           QStringLiteral("② 板上 FP16"));
-    mkCell(imgGrid, &m_imgFp16Sim, QStringLiteral("自动生成"), 1, 1,
-           QStringLiteral("④ FP16 模拟（参考）"));
+    mkCell(imgGrid, &m_imgSimFp16,  QStringLiteral("③ 构建中…"), 0, 1,
+           QStringLiteral("② FP16 模拟"));
+    mkCell(imgGrid, &m_imgSimInt8,  QStringLiteral("点 ⚖️ 后生成"), 0, 2,
+           QStringLiteral("③ int8 模拟"));
+    mkCell(imgGrid, &m_imgSimInt16, QStringLiteral("点 ⚖️ 后生成"), 0, 3,
+           QStringLiteral("④ int16 模拟"));
+    mkCell(imgGrid, &m_imgBdFp16,   QStringLiteral("板离线/未跑"), 1, 0,
+           QStringLiteral("⑤ 板上 FP16"));
+    mkCell(imgGrid, &m_imgBdInt8,   QStringLiteral("板离线/未跑"), 1, 1,
+           QStringLiteral("⑥ 板上 int8"));
+    mkCell(imgGrid, &m_imgBdInt16,  QStringLiteral("板离线/未跑"), 1, 2,
+           QStringLiteral("⑦ 板上 int16"));
     m_cmpViewStack->addWidget(imgPanel);              // m_cmpViewStack index 1
 
     // 视图 1：数据面板（四栏指标 + 逐层双表）
@@ -946,40 +969,25 @@ void MainWindow::buildUi() {
     auto *dv = new QVBoxLayout(dataPanel);
     dv->setContentsMargins(0, 0, 0, 0);
     dv->setSpacing(6);
-    auto *metricRow = new QHBoxLayout;
-    metricRow->setSpacing(6);
-    auto mkMetric = [&metricRow](QLabel **l, const QString &title) {
-        auto *col = new QVBoxLayout;
-        auto *t = new QLabel(title);
-        t->setObjectName("CardTitle");
-        col->addWidget(t);
-        *l = new QLabel(QStringLiteral("—"));
-        (*l)->setWordWrap(true);
-        (*l)->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        col->addWidget(*l, 1);
-        metricRow->addLayout(col, 1);
+    m_metricText = new QTextEdit;
+    m_metricText->setReadOnly(true);
+    QFont monoF(QStringLiteral("Consolas"));
+    monoF.setStyleHint(QFont::Monospace);
+    m_metricText->setFont(monoF);
+    m_metricText->setPlaceholderText(QStringLiteral("跑完 ⚖️ 后此处显示七通道指标总览"));
+    m_metricText->setMaximumHeight(220);
+    dv->addWidget(m_metricText);
+    auto *layerTabs = new QTabWidget;
+    auto mkTab = [&layerTabs](QTableWidget **t, const QString &title) {
+        *t = new QTableWidget(0, 5);
+        (*t)->setHorizontalHeaderLabels({QStringLiteral("层"), QStringLiteral("sim entire"),
+                                         QStringLiteral("sim single"),
+                                         QStringLiteral("rt entire"), QStringLiteral("rt single")});
+        layerTabs->addTab(*t, title);
     };
-    mkMetric(&m_metricOnnx, QStringLiteral("① ONNX 基线"));
-    mkMetric(&m_metricFp16, QStringLiteral("② 板上 FP16"));
-    mkMetric(&m_metricFp16Sim, QStringLiteral("③ FP16 模拟"));
-    mkMetric(&m_metricInt8, QStringLiteral("④ 板上 int16"));
-    dv->addLayout(metricRow);
-    auto *tablesRow = new QHBoxLayout;
-    tablesRow->setSpacing(6);
-    auto *leftCol = new QVBoxLayout;
-    leftCol->addWidget(new QLabel(QStringLiteral("模拟器逐层（simulator_error）")));
-    m_cmpSimTable = new QTableWidget(0, 3);
-    m_cmpSimTable->setHorizontalHeaderLabels({QStringLiteral("层"), QStringLiteral("entire"), QStringLiteral("single")});
-    leftCol->addWidget(m_cmpSimTable, 1);
-    auto *rightCol = new QVBoxLayout;
-    m_cmpRightTitle = new QLabel(QStringLiteral("板端逐层（runtime_error；板离线时=int8 模拟）"));
-    rightCol->addWidget(m_cmpRightTitle);
-    m_cmpRtTable = new QTableWidget(0, 3);
-    m_cmpRtTable->setHorizontalHeaderLabels({QStringLiteral("层"), QStringLiteral("entire"), QStringLiteral("single")});
-    rightCol->addWidget(m_cmpRtTable, 1);
-    tablesRow->addLayout(leftCol, 1);
-    tablesRow->addLayout(rightCol, 1);
-    dv->addLayout(tablesRow, 1);
+    mkTab(&m_tabInt8, QStringLiteral("逐层 · int8"));
+    mkTab(&m_tabInt16, QStringLiteral("逐层 · int16"));
+    dv->addWidget(layerTabs, 1);
     m_cmpViewStack->addWidget(dataPanel);             // m_cmpViewStack index 2
 
     connect(m_btnExport, &QPushButton::clicked, this, &MainWindow::onExportCompare);
@@ -1433,7 +1441,7 @@ void MainWindow::onAccCompare() {
     const QString device = m_accDevice->text().trimmed();   // 空则跳过④
 
     m_btnCompare->setEnabled(false);
-    appendLog(QStringLiteral("精度对比: %1（四级漏斗流式输出，先出左图，约 3~6 分钟）")
+    appendLog(QStringLiteral("精度对比: %1（七通道漏斗流式输出，先出 ONNX 基线，约 5~10 分钟）")
                   .arg(QFileInfo(onnx).fileName()), "#8b97a8");
     // 结果就地显示在本页右大区（面板层），流式填充；默认停在信息面板看操作流
     m_views->setCurrentIndex(1);
@@ -1442,10 +1450,16 @@ void MainWindow::onAccCompare() {
     m_rkRightStack->setCurrentIndex(1);
     m_cmpViewStack->setCurrentIndex(0);
     m_cmpLog->clear();
+    m_metricText->clear();
+    m_tabInt8->setRowCount(0);
+    m_tabInt16->setRowCount(0);
     m_imgOnnx->setPlaceholder(QStringLiteral("① ONNX 推理中…"));
-    m_imgFp16->setPlaceholder(QStringLiteral("板离线/未跑（② 板上 FP16）"));
-    m_imgFp16Sim->setPlaceholder(QStringLiteral("③ 构建中…"));
-    m_imgBoard->setPlaceholder(QStringLiteral("④ 板离线/未跑"));
+    m_imgSimFp16->setPlaceholder(QStringLiteral("② 构建中…"));
+    m_imgSimInt8->setPlaceholder(QStringLiteral("③ 排队中…"));
+    m_imgSimInt16->setPlaceholder(QStringLiteral("④ 排队中…"));
+    m_imgBdFp16->setPlaceholder(QStringLiteral("板离线/未跑"));
+    m_imgBdInt8->setPlaceholder(QStringLiteral("板离线/未跑"));
+    m_imgBdInt16->setPlaceholder(QStringLiteral("板离线/未跑"));
     // dump 目录给 Windows 路径：WSL python 经 /mnt/c 写入（norm_path 自动转），
     // Qt 直接用原路径读——同一物理目录，两侧一致
     const QString dumpWin = QDir::temp().filePath(QStringLiteral("acc_dump"));
@@ -1459,7 +1473,7 @@ void MainWindow::onAccCompare() {
                      dumpWin);
 }
 
-// 漏斗摘要：构建文案并写入信息面板（不在对比面板显示），仅在 finished 调用一次
+// 漏斗摘要：七通道指标总览写入数据面板 m_metricText，漏斗判读追加进信息面板；仅 finished 调用
 void MainWindow::updateCompareSummary(const QJsonObject &o) {
     const QJsonObject stages = o.value("stages").toObject();
     const QJsonObject match = o.value("match").toObject();
@@ -1484,91 +1498,111 @@ void MainWindow::updateCompareSummary(const QJsonObject &o) {
         for (const QJsonValue &v : a) s += v.toDouble();
         return s / a.size();
     };
-    auto line = [](const QString &tag, int n, double miou, double drop, double cos) {
-        return QStringLiteral("%1  检出 %2 框 · mean IoU %3 · conf 掉点 %4 · 张量余弦 %5")
-            .arg(tag, -22).arg(n)
-            .arg(miou, 0, 'f', 4).arg(drop, 0, 'f', 4).arg(cos, 0, 'f', 5);
+    struct Chan { const char *key, *tag; };
+    const Chan chans[] = {
+        {"2_sim_fp16", "② FP16 模拟"},   {"3_sim_int8", "③ int8 模拟"},
+        {"4_sim_int16", "④ int16 模拟"}, {"5_board_fp16", "⑤ 板上 FP16"},
+        {"6_board_int8", "⑥ 板上 int8"}, {"7_board_int16", "⑦ 板上 int16"},
     };
-    auto secOf = [&stages](const QString &k) {
-        return stages.value(k).toObject();
-    };
-    QString body = QStringLiteral("① ONNX 基线（float，金标准）");
-    if (nOf("2_board_fp16") >= 0)
-        body += QStringLiteral("<br>") + line(QStringLiteral("② 板上 FP16"),
-            nOf("2_board_fp16"), miouOf("2_vs_1"), dropOf("2_vs_1"), cosAvg("2_vs_1"));
-    if (nOf("3_fp16_sim") >= 0)
-        body += QStringLiteral("<br>") + line(QStringLiteral("③ FP16 模拟（参考）"),
-            nOf("3_fp16_sim"), miouOf("3_vs_1"), dropOf("3_vs_1"), cosAvg("3_vs_1"));
-    const QJsonObject st4 = secOf("4_board_int16");
-    if (st4.contains("n"))
-        body += QStringLiteral("<br>") + line(QStringLiteral("④ 板上 int16"),
-            st4.value("n").toInt(), miouOf("4_vs_1"), dropOf("4_vs_1"), cosAvg("4_vs_1"));
-    else if (st4.contains("error"))
-        body += QStringLiteral("<br>④ 板上 int16 —— 连接失败（查设备地址/rknn_server）");
-    else
-        body += QStringLiteral("<br>④ 板上 int16 —— 设备地址为空，跳过");
-    if (o.contains(QStringLiteral("min_single")))
-        body += QStringLiteral("<br>逐层: %1 层 · 最低 sim_single %2 · 低余弦 %3 层")
-            .arg(o.value("layers").toArray().size())
-            .arg(o.value("min_single").toDouble(), 0, 'f', 5)
-            .arg(o.value("n_low").toInt());
-    body += QStringLiteral("<br><i>判读: ②掉点=转换损失(应≈0) · ④-③=量化+实现差异</i>");
-    m_cmpLog->append(QStringLiteral("<b>%1</b> @ %2 · 基准 ① ONNX float32（检出 %3 框）%4<br>%5")
+    // 指标总览（数据面板，等宽对齐的七行表）
+    QString txt = QStringLiteral("%1  %2  %3  %4  %5\n")
+                      .arg(QStringLiteral("通道"), -16)
+                      .arg(QStringLiteral("检出"), 4).arg(QStringLiteral("mean_IoU"), 9)
+                      .arg(QStringLiteral("conf掉点"), 9)
+                      .arg(QStringLiteral("张量余弦"), 10);
+    txt += QStringLiteral("%1  %2  %3  %4  %5\n")
+               .arg(QStringLiteral("① ONNX float32"), -16)
+               .arg(nOf("1_onnx"), 4).arg(QStringLiteral("—"), 9)
+               .arg(QStringLiteral("—"), 9).arg(QStringLiteral("基准"), 10);
+    for (const Chan &c : chans) {
+        const QString k = QString::fromLatin1(c.key);
+        const QJsonObject st = stages.value(k).toObject();
+        if (st.contains(QStringLiteral("skipped"))) {
+            txt += QStringLiteral("%1  %2\n").arg(QString::fromLatin1(c.tag), -16)
+                       .arg(QStringLiteral("未连板，跳过"));
+            continue;
+        }
+        if (st.contains(QStringLiteral("error"))) {
+            txt += QStringLiteral("%1  %2\n").arg(QString::fromLatin1(c.tag), -16)
+                       .arg(QStringLiteral("失败: ") + st.value("error").toString().left(28));
+            continue;
+        }
+        txt += QStringLiteral("%1  %2  %3  %4  %5\n")
+                   .arg(QString::fromLatin1(c.tag), -16)
+                   .arg(nOf(k), 4)
+                   .arg(miouOf(k), 9, 'f', 4)
+                   .arg(dropOf(k), 9, 'f', 4)
+                   .arg(cosAvg(k), 10, 'f', 5);
+    }
+    const QJsonObject layers = o.value("layers").toObject();
+    for (const QString &q : {QStringLiteral("int8"), QStringLiteral("int16")}) {
+        const QJsonArray arr = layers.value(q).toArray();
+        if (arr.isEmpty()) continue;
+        double mn = 2.0;
+        int lows = 0;
+        for (const QJsonValue &v : arr) {
+            const double ss = v.toObject().value(QStringLiteral("sim_single_cos")).toDouble(1.0);
+            mn = qMin(mn, ss);
+            if (ss < 0.99) ++lows;
+        }
+        txt += QStringLiteral("逐层·%1: %2 层 · 最低 sim_single %3 · 低余弦 %4 层\n")
+                   .arg(q).arg(arr.size()).arg(mn, 0, 'f', 5).arg(lows);
+    }
+    m_metricText->setPlainText(txt);
+
+    // 漏斗判读（信息面板）
+    QString body;
+    for (const Chan &c : chans) {
+        const QString k = QString::fromLatin1(c.key);
+        const QJsonObject st = stages.value(k).toObject();
+        if (st.contains(QStringLiteral("skipped"))) {
+            body += QStringLiteral("<br>%1 —— 未连板，跳过").arg(QString::fromLatin1(c.tag));
+        } else if (st.contains(QStringLiteral("error"))) {
+            body += QStringLiteral("<br><span style='color:#ff6b6b'>%1 —— 失败（查 WSL 环境/设备）</span>")
+                        .arg(QString::fromLatin1(c.tag));
+        } else {
+            body += QStringLiteral("<br>") + QStringLiteral("%1  检出 %2 框 · mean IoU %3 · conf 掉点 %4 · 张量余弦 %5")
+                        .arg(QString::fromLatin1(c.tag), -18).arg(nOf(k))
+                        .arg(miouOf(k), 0, 'f', 4).arg(dropOf(k), 0, 'f', 4)
+                        .arg(cosAvg(k), 0, 'f', 5);
+        }
+    }
+    body += QStringLiteral("<br><i>判读: 模拟②③④=转换+量化算法损失 · 板⑤⑥⑦再叠加运行时实现差异 · 同 dtype 下 板-模拟≈0 说明运行时无损</i>");
+    m_cmpLog->append(QStringLiteral("<b>%1</b> @ %2 · 基准 ① ONNX float32（检出 %3 框）· 全程 %4 s<br>%5")
                               .arg(o.value("model").toString().toHtmlEscaped(),
                                    o.value("image").toString().toHtmlEscaped())
                               .arg(nOf("1_onnx"))
                               .arg(o.value("total_ms").toDouble() / 1000, 0, 'f', 1)
                               .arg(body));
-
-    // 数据面板四栏指标
-    auto metric = [](int n, double miou, double drop, double cos, bool err) {
-        if (err) return QStringLiteral("连接失败/未运行\n（查设备地址与 rknn_server）");
-        if (n < 0) return QStringLiteral("—");
-        return QStringLiteral("检出 %1 框\nmean IoU %2\nconf 掉点 %3\n张量余弦 %4")
-            .arg(n).arg(miou, 0, 'f', 4).arg(drop, 0, 'f', 4).arg(cos, 0, 'f', 5);
-    };
-    const bool e2 = stages.value("2_board_fp16").toObject().contains(QStringLiteral("error"));
-    const bool e4 = stages.value("4_board_int16").toObject().contains(QStringLiteral("error"));
-    m_metricOnnx->setText(QStringLiteral("检出 %1 框\nfloat32 基准\n金标准")
-                              .arg(nOf("1_onnx")));
-    m_metricFp16->setText(metric(nOf("2_board_fp16"), miouOf("2_vs_1"),
-                                 dropOf("2_vs_1"), cosAvg("2_vs_1"), e2));
-    m_metricFp16Sim->setText(metric(nOf("3_fp16_sim"), miouOf("3_vs_1"),
-                                    dropOf("3_vs_1"), cosAvg("3_vs_1"), false));
-    m_metricInt8->setText(metric(nOf("4_board_int16"), miouOf("4_vs_1"),
-                                 dropOf("4_vs_1"), cosAvg("4_vs_1"), e4));
 }
 
-// 对比视图双表：layers 来自 rknn_acc（sim_*  填左表，rt_* 填右表），低余弦标红
-void MainWindow::fillLayerTables(const QJsonArray &layers) {
-    auto fill = [](QTableWidget *t, const QString &entKey, const QString &sglKey,
-                   const QJsonArray &arr) {
-        t->setRowCount(0);
-        int row = 0;
-        for (const QJsonValue &v : arr) {
-            const QJsonObject o = v.toObject();
-            const double ent = o.value(entKey).toDouble(-1);
-            const double sgl = o.value(sglKey).toDouble(-1);
-            if (ent < 0 && sgl < 0) continue;
-            t->insertRow(row);
-            auto mk = [](double val) {
-                auto *it = new QTableWidgetItem(val > 0 ? QString::number(val, 'f', 5)
-                                                        : QStringLiteral("—"));
-                if (val > 0 && val < 0.99)
-                    it->setForeground(QColor(0xff, 0x6b, 0x6b));   // 低于验收线标红
-                return it;
-            };
-            t->setItem(row, 0, new QTableWidgetItem(o.value("name").toString()));
-            t->setItem(row, 1, mk(ent));
-            t->setItem(row, 2, mk(sgl));
-            ++row;
-        }
-        t->resizeColumnsToContents();
-    };
-    fill(m_cmpSimTable, QStringLiteral("sim_entire_cos"),
-         QStringLiteral("sim_single_cos"), layers);
-    fill(m_cmpRtTable, QStringLiteral("rt_entire_cos"),
-         QStringLiteral("rt_single_cos"), layers);
+// 逐层表填充：五列（层名 + sim entire/single + rt entire/single），低余弦标红
+void MainWindow::fillLayerTable(QTableWidget *t, const QJsonArray &layers) {
+    t->setRowCount(0);
+    int row = 0;
+    for (const QJsonValue &v : layers) {
+        const QJsonObject o = v.toObject();
+        const double se = o.value("sim_entire_cos").toDouble(-1);
+        const double ss = o.value("sim_single_cos").toDouble(-1);
+        const double re = o.value("rt_entire_cos").toDouble(-1);
+        const double rs = o.value("rt_single_cos").toDouble(-1);
+        if (se < 0 && ss < 0 && re < 0 && rs < 0) continue;
+        t->insertRow(row);
+        auto mk = [](double val) {
+            auto *it = new QTableWidgetItem(val > 0 ? QString::number(val, 'f', 5)
+                                                    : QStringLiteral("—"));
+            if (val > 0 && val < 0.99)
+                it->setForeground(QColor(0xff, 0x6b, 0x6b));   // 低于验收线标红
+            return it;
+        };
+        t->setItem(row, 0, new QTableWidgetItem(o.value("name").toString()));
+        t->setItem(row, 1, mk(se));
+        t->setItem(row, 2, mk(ss));
+        t->setItem(row, 3, mk(re));
+        t->setItem(row, 4, mk(rs));
+        ++row;
+    }
+    t->resizeColumnsToContents();
 }
 
 // 导出精度对比数据：JSON 原始 + 双表 CSV + 标注图引用清单，存到用户选的目录
@@ -1612,8 +1646,8 @@ void MainWindow::onExportCompare() {
             }
         }
     };
-    dumpCsv(m_cmpSimTable, QStringLiteral("sim_layers"));
-    dumpCsv(m_cmpRtTable, QStringLiteral("runtime_layers"));
+    dumpCsv(m_tabInt8, QStringLiteral("int8_layers"));
+    dumpCsv(m_tabInt16, QStringLiteral("int16_layers"));
 
     // 3) 标注图引用清单（存在则写路径）
     QStringList refs;

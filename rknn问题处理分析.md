@@ -201,6 +201,26 @@ netsh interface ip add neighbors "以太网 2" 192.168.0.96 6C-05-D3-06-57-57
 - ② mediamtx.exe 双击启动（要用 RTSP 预览时）——它同样不自启
 - WSL/toolkit2/数据（`assets/acc/` 在 WSL 磁盘 VHD 上）全部持久，无需任何操作
 
+### 6.2 2026-10-25 环境变更：板子换到 192.168.3.x 网段，WSL adb 改原生直连
+
+板子 WiFi 换网（.96→192.168.3.163）后 PC 局域网 IP 也漂了（192.168.0.86→192.168.3.119），旧方案三处全废：
+
+1. **`~/bin/adb` 包装脚本**（WSL toolkit2 用的 adb）：原来 `ADB_SERVER_SOCKET=tcp:192.168.0.86:5037` 共享 Windows adb server——PC IP 漂移后该地址不可达，且 Windows server 默认只绑 127.0.0.1。**已改写为 WSL 原生 adb 直连**：`exec ~/platform-tools/adb "$@"`。注意旧脚本 `exec adb.exe ""` 把调用方参数全丢了（永远只发一个空参数），排障时"adb get-state 永远 offline"是它制造的假象。Windows 侧覆写该文件后须 `chmod +x`（Windows 写文件会丢执行位）。
+2. **静态 ARP**（§6.1 ①）：.96 影子设备问题随换网自动消失，3.x 网段暂无 ARP 抢答，无需再钉。
+3. **板子换网后首次使用**：`adb connect 192.168.3.163:5555`（WSL 原生 adb 自建 server）+ 检查 rknn_server（③ 命令不变）。
+
+一键预检脚本模式（板连接 + rknn_server 存活检查 + 死了自动重启）已内置于 `tools/acc_compare.py` 启动逻辑与 GUI；手工版见本节 ①③ 两步。
+
+### 6.3 2026-10-25 七通道实测结论：⑦ 板上 int16 是平台断点
+
+yolov8n 七通道全量对比实测（板 rk3576 / toolkit2+server+rt 全 2.3.2）：
+
+- ①~⑥ 全过：sim fp16 0.9995 / sim int8 0.9933 / sim int16 1.0 / 板 fp16 0.999 / 板 int8 0.9851（mean IoU vs ONNX）
+- ⑦ 板上 int16（w16a16i）：模型能 init、推理能跑，但 `rknn_outputs_get` 恒 `ACK_FAIL → RKNN_ERR_FAIL`（rknn_runtime.py get_outputs）。**全新重启 rknn_server 后单独复测同位置同错** → 平台限制，非流程 bug。与既往"w16a16i 在 RK3576 全 CPU 回退"结论吻合：CPU 回退路径的 int16 输出经 rknn_server 回传通道不通。
+- **连带效应**：⑦ 失败后 rknn_server 进程仍活着但连接线程楔死（`futex_wait`），同一脚本里后续板上 accuracy_analysis（板 int8/int16 逐层）全部 Traceback。遇到"板上操作连环失败但 server 进程在"→ 先 `pkill -f rknn_server` 重启再判，别急着怀疑环境。
+- 逐层（accuracy_analysis）模拟列不受影响：int8 177 层最低 sim_single 0.99398、int16 177 层 0.99998（零低余弦层）。
+- GUI 侧该失败被逐级捕获展示（⑦ 格子空 + 信息面板红字），不阻塞其余六通道——这是设计行为，不是缺陷。
+
 ## 7. 方法论沉淀
 
 - **卡点先搜后试**：本次最大的弯路（usbipd/ARP 的一长串尝试）始于没先搜"accuracy_analysis 别人怎么跑"——一搜就发现 load_rknn 限制和官方流程。先查官方文档与社区做法，再动手。

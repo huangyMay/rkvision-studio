@@ -34,7 +34,7 @@ fig.suptitle("helmet model — accuracy_analysis quantization report", fontsize=
 
 # 左图：四级漏斗（端到端 IoU/余弦对比）
 stages = ["ONNX\n(float baseline)", "RKNN\nFP16 sim", "RKNN\nint8 sim", "Board\nint8"]
-vals = [1.0, 0.9995, 0.9933, None]           # ④ 板离线未测
+vals = [1.0, 0.9995, 0.9933, 0.9851]      # ④ 板上实测 2026-10-24
 colors = ["#3ecf72", "#4ff0ff", "#ffd24a", "#888888"]
 bars = ax1.bar(stages, [v if v else 0 for v in vals],
                color=colors, alpha=0.85, width=0.55)
