@@ -17,6 +17,9 @@ public:
                const QString &onnxWsl, const QString &imageWsl,
                const QString &device, const QString &meanstd,
                const QString &datasetWsl, const QString &dumpDir);
+    // 通用形态：脚本参数自由拼（hybrid_quant 等两段式向导用）；流式协议同款
+    void startRaw(const QString &distro, const QString &scriptWsl,
+                  const QStringList &args);
     void stop();
 
 signals:

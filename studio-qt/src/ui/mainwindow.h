@@ -49,6 +49,8 @@ private slots:
     void onRknnSim();
     void onBoardPerf();
     void onAccCompare();
+    void onHybridPropose();                     // 🧬 向导 step1：toolkit 敏感层提议
+    void onHybridBuild();                       // 🧬 向导 step2：勾选层构建+板复测
     void onExportCompare();
     void fillLayerTable(QTableWidget *t, const QJsonArray &layers);  // 填充逐层表（5 列 sim|rt）
     void updateCompareSummary(const QJsonObject &o);  // 对比视图漏斗摘要（流式渐进刷新）
@@ -120,6 +122,12 @@ private:
     QTextEdit *m_cmpLog = nullptr;                // 信息面板：操作流日志
     QLabel *m_chanLabel[7] = {};                  // 数据面板：各通道总体指标标签
     QTableWidget *m_chanTable[7] = {};            // 数据面板：各通道逐层表
+    // 🧬 混合量化向导（对比面板第 4 页签）
+    QTableWidget *m_hqTable = nullptr;            // 敏感层勾选表（勾选|层名|相似度分）
+    QPushButton *m_hqBtnGo = nullptr;             // 开工（step2 构建+板复测）
+    QLabel *m_hqResult = nullptr;                 // 结果（IoU 对比 + .rknn 路径）
+    QString m_hqCfg;                              // step1 产出的 cfg（WSL 路径）
+    int m_hqPhase = 0;                            // 0=propose 1=build（finished 分流）
     QPushButton *m_btnExport = nullptr;        // 💾 导出报告
     QString m_lastCompareJson;                 // 最近一次精度分析的原始 JSON（导出用）
     QString m_cmpDumpDir;                      // 最近一次对比的标注图目录
@@ -139,9 +147,11 @@ private:
     QDoubleSpinBox *m_rkIouSpin = nullptr;
     QPushButton *m_btnRkSim = nullptr;
     QPushButton *m_btnCompare = nullptr;       // ⚖️ 七通道精度对比
+    QPushButton *m_btnHq = nullptr;            // 🧬 混合量化向导（propose 入口）
     QPushButton *m_btnBoardPerf = nullptr;     // 📡 板端 NPU 性能
     QLineEdit *m_accDevice = nullptr;          // 网络 adb 地址（IP:端口，⚖️/📡 共用）
     AccCompareRunner *m_compare = nullptr;
+    AccCompareRunner *m_hqRunner = nullptr;    // 🧬 向导专用（两段复用）
     RknnSimRunner *m_rknn = nullptr;
     BoardPerfRunner *m_boardPerf = nullptr;
     // LIVE 页 PC 实时推理

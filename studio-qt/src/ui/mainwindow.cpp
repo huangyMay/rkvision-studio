@@ -269,6 +269,75 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                                        : QStringLiteral(" · ⚠ 未填存盘路径，仅模拟")),
                   "#3ecf72");
     });
+    // 🧬 混合量化向导 runner（两段复用：propose 提议 → 勾选 → build 构建+板复测）
+    m_hqRunner = new AccCompareRunner(this);
+    connect(m_hqRunner, &AccCompareRunner::logLine, this, &MainWindow::appendLog);
+    connect(m_hqRunner, &AccCompareRunner::flowLog, this, [this](const QString &msg) {
+        const QString ts = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss"));
+        m_cmpLog->append(QStringLiteral("<span style='color:#5a6a80'>%1</span> %2")
+                             .arg(ts, msg.toHtmlEscaped()));
+    });
+    connect(m_hqRunner, &AccCompareRunner::finished, this,
+            [this](bool ok, const QString &json, const QString &err) {
+        m_btnHq->setEnabled(true);
+        m_hqBtnGo->setEnabled(true);
+        if (!ok) {
+            appendLog(QStringLiteral("混合量化失败: %1").arg(err), "#ff6b6b");
+            m_hqResult->setText(QStringLiteral("✗ %1").arg(err));
+            return;
+        }
+        const QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
+        if (m_hqPhase == 0) {            // propose 结果 → 敏感层勾选表
+            const QJsonArray prop = o.value(QStringLiteral("proposal")).toArray();
+            m_hqCfg = o.value(QStringLiteral("files")).toObject()
+                          .value(QStringLiteral("cfg")).toString();
+            m_hqTable->setRowCount(0);
+            int row = 0;
+            for (const QJsonValue &v : prop) {
+                const QJsonObject p = v.toObject();
+                const double sc = p.value(QStringLiteral("score")).toDouble(-1);
+                m_hqTable->insertRow(row);
+                auto *c = new QTableWidgetItem;
+                c->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
+                c->setCheckState((row < 10 || (sc > 0 && sc < 0.999))
+                                     ? Qt::Checked : Qt::Unchecked);
+                m_hqTable->setItem(row, 0, c);
+                m_hqTable->setItem(row, 1,
+                    new QTableWidgetItem(p.value(QStringLiteral("name")).toString()));
+                m_hqTable->setItem(row, 2, new QTableWidgetItem(
+                    sc > 0 ? QString::number(sc, 'f', 6) : QStringLiteral("—")));
+                ++row;
+            }
+            m_hqTable->resizeColumnsToContents();
+            m_hqResult->setText(QStringLiteral("step1 完成：%1 层提议（默认勾前 10 + 分值<0.999）"
+                                               "——可增删后点「🚀 开工」").arg(prop.size()));
+            appendLog(QStringLiteral("混合量化: toolkit 提议 %1 层，等待勾选").arg(prop.size()),
+                      "#3ecf72");
+            m_cmpViewStack->setCurrentIndex(3);
+        } else {                          // build 结果 → IoU 对比
+            const double iou = o.value(QStringLiteral("match")).toObject()
+                                   .value(QStringLiteral("mean_iou")).toDouble(-1);
+            const double ref = o.value(QStringLiteral("ref_iou")).toDouble(-1);
+            const int nl = o.value(QStringLiteral("n_fp16_layers")).toInt();
+            const QString rk = o.value(QStringLiteral("hybrid_rknn")).toString();
+            QString txt = QStringLiteral("🧬 混合量化完成：%1 层保 fp16 · 板上检出 %2 框 · mean IoU %3")
+                              .arg(nl)
+                              .arg(o.value(QStringLiteral("board")).toObject()
+                                       .value(QStringLiteral("n")).toInt())
+                              .arg(iou, 0, 'f', 4);
+            if (ref > 0)
+                txt += QStringLiteral("（纯 int8 %1 → 提升 %2）")
+                           .arg(ref, 0, 'f', 4).arg(iou - ref, 0, 'f', 4);
+            txt += QStringLiteral("\n模型: %1").arg(rk);
+            m_hqResult->setText(txt);
+            m_cmpLog->append(QStringLiteral("<b>🧬 混合量化</b> %1 层 fp16 · 板上 IoU %2%3")
+                .arg(nl).arg(iou, 0, 'f', 4)
+                .arg(ref > 0 ? QStringLiteral("（纯 int8 %1 → +%2）").arg(ref, 0, 'f', 4)
+                                                       .arg(iou - ref, 0, 'f', 4)
+                            : QString()));
+            appendLog(QStringLiteral("混合模型已生成: %1").arg(rk), "#3ecf72");
+        }
+    });
     m_boardPerf = new BoardPerfRunner(this);
     connect(m_boardPerf, &BoardPerfRunner::finished, this, [this](const BoardPerf &r) {
         m_btnBoardPerf->setEnabled(true);
@@ -819,6 +888,9 @@ void MainWindow::buildUi() {
     cmpRow->addWidget(m_accDevice);
     rkL->addLayout(cmpRow);
     connect(m_btnCompare, &QPushButton::clicked, this, &MainWindow::onAccCompare);
+    m_btnHq = new QPushButton(QStringLiteral("🧬 混合量化向导（敏感层保 fp16，修精度）"));
+    rkL->addWidget(m_btnHq);
+    connect(m_btnHq, &QPushButton::clicked, this, &MainWindow::onHybridPropose);
     m_btnBoardPerf = new QPushButton(QStringLiteral("📡 板端性能（NPU 真测，需板在线，用「存/导入」里的 .rknn）"));
     rkL->addWidget(m_btnBoardPerf);
     connect(m_btnBoardPerf, &QPushButton::clicked, this, &MainWindow::onBoardPerf);
@@ -844,18 +916,23 @@ void MainWindow::buildUi() {
     picBtn->setCheckable(true);
     auto *dataBtn = new QPushButton(QStringLiteral("📊 数据面板"));
     dataBtn->setCheckable(true);
+    auto *hqViewBtn = new QPushButton(QStringLiteral("🧬 混合量化"));
+    hqViewBtn->setCheckable(true);
     auto *viewGroup = new QButtonGroup(this);
     viewGroup->setExclusive(true);
     viewGroup->addButton(infoBtn);
     viewGroup->addButton(picBtn);
     viewGroup->addButton(dataBtn);
+    viewGroup->addButton(hqViewBtn);
     connect(infoBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(0); });
     connect(picBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(1); });
     connect(dataBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(2); });
+    connect(hqViewBtn, &QPushButton::clicked, this, [this] { m_cmpViewStack->setCurrentIndex(3); });
     m_btnExport = new QPushButton(QStringLiteral("💾 导出报告"));
     cvTail->addWidget(infoBtn);
     cvTail->addWidget(picBtn);
     cvTail->addWidget(dataBtn);
+    cvTail->addWidget(hqViewBtn);
     cvTail->addStretch(1);
     cvTail->addWidget(m_btnExport);
     cvLayout->addLayout(cvTail);
@@ -946,6 +1023,33 @@ void MainWindow::buildUi() {
     }
     dv->addWidget(chanTabs, 1);
     m_cmpViewStack->addWidget(dataPanel);             // m_cmpViewStack index 2
+
+    // 视图 3：🧬 混合量化向导（敏感层勾选 → 开工 → 结果对比）
+    auto *hqPanel = new QWidget;
+    auto *hv = new QVBoxLayout(hqPanel);
+    hv->setContentsMargins(0, 4, 0, 0);
+    hv->setSpacing(6);
+    auto *hqHint = new QLabel(QStringLiteral(
+        "全模型 int8、勾选的层保 fp16——专修量化精度损失。toolkit 提议按敏感度排序（分越低越疼），"
+        "勾得越少速度越接近纯 int8；点左列「🧬 混合量化向导」重新生成提议。"));
+    hqHint->setWordWrap(true);
+    hv->addWidget(hqHint);
+    m_hqTable = new QTableWidget(0, 3);
+    m_hqTable->setHorizontalHeaderLabels(
+        {QStringLiteral("保 fp16"), QStringLiteral("层"), QStringLiteral("相似度分（低=敏感）")});
+    m_hqTable->setAlternatingRowColors(true);
+    hv->addWidget(m_hqTable, 1);
+    auto *hqRow = new QHBoxLayout;
+    m_hqBtnGo = new QPushButton(QStringLiteral("🚀 开工（构建 + 板复测）"));
+    m_hqBtnGo->setObjectName("Primary");
+    connect(m_hqBtnGo, &QPushButton::clicked, this, &MainWindow::onHybridBuild);
+    m_hqResult = new QLabel(QStringLiteral("先点左列「🧬 混合量化向导」生成敏感层提议"));
+    m_hqResult->setWordWrap(true);
+    m_hqResult->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    hqRow->addWidget(m_hqBtnGo);
+    hqRow->addWidget(m_hqResult, 1);
+    hv->addLayout(hqRow);
+    m_cmpViewStack->addWidget(hqPanel);               // m_cmpViewStack index 3
 
     connect(m_btnExport, &QPushButton::clicked, this, &MainWindow::onExportCompare);
 
@@ -1431,6 +1535,93 @@ void MainWindow::onAccCompare() {
                      device, meanstd,
                      OnnxRunner::toWslPath(dsLocal),
                      dumpWin);
+}
+
+// 🧬 向导 step1：toolkit 敏感层提议（校准 + proposal 分析，约 1~2 分钟）
+void MainWindow::onHybridPropose() {
+    if (m_hqRunner->running()) return;
+    const QString onnx = m_rkModelPath->text().trimmed();
+    const QString image = m_rkImagePath->text().trimmed();
+    if (onnx.isEmpty() || !QFileInfo::exists(onnx)
+            || !onnx.endsWith(QStringLiteral(".onnx"), Qt::CaseInsensitive)) {
+        appendLog(QStringLiteral("混合量化：先选有效的 .onnx 模型"), "#ff6b6b");
+        return;
+    }
+    if (image.isEmpty() || !QFileInfo::exists(image)) {
+        appendLog(QStringLiteral("混合量化：先选一张校准/测试图片"), "#ff6b6b");
+        return;
+    }
+    const QString dsLocal = QDir::temp().filePath(QStringLiteral("rvs_hq_dataset.txt"));
+    {
+        QFile ds(dsLocal);
+        if (ds.open(QIODevice::WriteOnly | QIODevice::Text))
+            ds.write((OnnxRunner::toWslPath(image) + QStringLiteral("\n")).toUtf8());
+    }
+    QString meanstd = m_rkMeanStd->text().trimmed();
+    if (meanstd.isEmpty()) meanstd = QStringLiteral("0,0,0/255,255,255");
+    meanstd.replace(QLatin1Char('|'), QLatin1Char('/'));
+    const QString dumpWin = QDir::temp().filePath(QStringLiteral("acc_dump"));
+    m_hqPhase = 0;
+    m_hqCfg.clear();
+    m_btnHq->setEnabled(false);
+    m_hqResult->setText(QStringLiteral("step1 提议中（校准 + 敏感层分析，约 1~2 分钟）…"));
+    appendLog(QStringLiteral("混合量化向导: step1 提议敏感层…"), "#8b97a8");
+    m_views->setCurrentIndex(1);
+    m_navLab->setChecked(true);
+    m_labStack->setCurrentIndex(1);
+    m_cmpViewStack->setCurrentIndex(3);
+    m_hqRunner->startRaw(QStringLiteral("Ubuntu-22.04"),
+        OnnxRunner::toWslPath(QString::fromUtf8(RVS_TOOLS_DIR) +
+                              QStringLiteral("/hybrid_quant.py")),
+        {QStringLiteral("propose"), OnnxRunner::toWslPath(onnx),
+         OnnxRunner::toWslPath(dsLocal), dumpWin, meanstd});
+}
+
+// 🧬 向导 step2：勾选层写 cfg → 混合构建 → 板复测（对比纯 int8 参考值）
+void MainWindow::onHybridBuild() {
+    if (m_hqRunner->running()) return;
+    if (m_hqCfg.isEmpty()) {
+        m_hqResult->setText(QStringLiteral("先点左列「🧬 混合量化向导」生成提议"));
+        return;
+    }
+    QStringList layers;
+    for (int r = 0; r < m_hqTable->rowCount(); ++r) {
+        const QTableWidgetItem *c = m_hqTable->item(r, 0);
+        const QTableWidgetItem *n = m_hqTable->item(r, 1);
+        if (c && n && c->checkState() == Qt::Checked) layers << n->text();
+    }
+    if (layers.isEmpty()) {
+        m_hqResult->setText(QStringLiteral("至少勾选 1 层再开工"));
+        return;
+    }
+    // 参考值：上次 ⚖️ 的 ⑥ 板上 int8 IoU（有则结果里算提升量）
+    QString refStr;
+    if (!m_lastCompareJson.isEmpty()) {
+        const QJsonObject o = QJsonDocument::fromJson(m_lastCompareJson.toUtf8()).object();
+        const double ref = o.value(QStringLiteral("match")).toObject()
+                               .value(QStringLiteral("6_board_int8_vs_1")).toObject()
+                               .value(QStringLiteral("mean_iou")).toDouble(-1);
+        if (ref > 0) refStr = QString::number(ref, 'f', 4);
+    }
+    const QString onnx = m_rkModelPath->text().trimmed();
+    const QString image = m_rkImagePath->text().trimmed();
+    QString meanstd = m_rkMeanStd->text().trimmed();
+    if (meanstd.isEmpty()) meanstd = QStringLiteral("0,0,0/255,255,255");
+    meanstd.replace(QLatin1Char('|'), QLatin1Char('/'));
+    const QString dumpWin = QDir::temp().filePath(QStringLiteral("acc_dump"));
+    m_hqPhase = 1;
+    m_hqBtnGo->setEnabled(false);
+    m_btnHq->setEnabled(false);
+    m_hqResult->setText(QStringLiteral("step2 构建中（量化重排）+ 板复测…约 2~4 分钟"));
+    appendLog(QStringLiteral("混合量化 step2: %1 层保 fp16，构建+板复测…").arg(layers.size()),
+              "#8b97a8");
+    QStringList args{QStringLiteral("build"), m_hqCfg,
+                     OnnxRunner::toWslPath(onnx), OnnxRunner::toWslPath(image),
+                     m_accDevice->text().trimmed(), meanstd, dumpWin, layers.join(',')};
+    if (!refStr.isEmpty()) args << refStr;
+    m_hqRunner->startRaw(QStringLiteral("Ubuntu-22.04"),
+        OnnxRunner::toWslPath(QString::fromUtf8(RVS_TOOLS_DIR) +
+                              QStringLiteral("/hybrid_quant.py")), args);
 }
 
 // ---- 七通道辅助：键名/页签名/索引 ----

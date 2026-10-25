@@ -13,18 +13,24 @@ void AccCompareRunner::start(const QString &distro, const QString &scriptWsl,
                              const QString &onnxWsl, const QString &imageWsl,
                              const QString &device, const QString &meanstd,
                              const QString &datasetWsl, const QString &dumpDir) {
+    QStringList args{onnxWsl, imageWsl};
+    if (!device.isEmpty()) args << device;
+    args << QStringLiteral("0.25") << QStringLiteral("0.45") << meanstd << datasetWsl
+         << dumpDir;
+    startRaw(distro, scriptWsl, args);
+}
+
+void AccCompareRunner::startRaw(const QString &distro, const QString &scriptWsl,
+                                const QStringList &args) {
     stop();
     m_out.clear();
     m_finalJson.clear();
     m_proc = new QProcess(this);
     m_proc->setProgram(QStringLiteral("wsl.exe"));
-    QStringList args{QStringLiteral("-d"), distro, QStringLiteral("--"),
-                     QStringLiteral("python3"), QStringLiteral("-u"), scriptWsl,
-                     onnxWsl, imageWsl};
-    if (!device.isEmpty()) args << device;
-    args << QStringLiteral("0.25") << QStringLiteral("0.45") << meanstd << datasetWsl
-         << dumpDir;
-    m_proc->setArguments(args);
+    QStringList full{QStringLiteral("-d"), distro, QStringLiteral("--"),
+                     QStringLiteral("python3"), QStringLiteral("-u"), scriptWsl};
+    full << args;
+    m_proc->setArguments(full);
     connect(m_proc, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
         emit logLine(QStringLiteral("精度对比: 进程错误（WSL python3/toolkit2 可用？）"), "#ff6b6b");
     });
