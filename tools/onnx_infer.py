@@ -27,10 +27,15 @@ import onnxruntime as ort
 
 
 def norm_path(p):
-    """容忍 Windows 侧 UNC 路径：//wsl.localhost/<发行版>/home/... -> /home/..."""
+    """路径归一到 WSL 形态：UNC(//wsl.localhost/...) 与盘符(C:/...) 都转。
+    盘符漏转的后果：被当相对路径，落进 CWD 下的畸形目录（rvs_studio_test/C:/...），
+    GUI 按 C:/ 读图时还会拿到旧残留顶包——2026-10-25 "没画面"事故根因。"""
     m = re.match(r'^[\\/]{2}wsl(?:\.localhost|\$)[\\/]([^\\/]+)[\\/](.*)$', p)
     if m:
         return '/' + m.group(2).replace('\\', '/')
+    m = re.match(r'^([A-Za-z]):[\\/](.*)$', p)
+    if m:
+        return '/mnt/' + m.group(1).lower() + '/' + m.group(2).replace('\\', '/')
     return p
 
 
