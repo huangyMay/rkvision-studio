@@ -12,7 +12,6 @@ class OnnxRunner;
 class OnnxProbeRunner;
 class PreviewWidget;
 class RknnSimRunner;
-class BoardAccRunner;
 class AccCompareRunner;
 class WorkflowPage;
 class QCheckBox;
@@ -49,7 +48,6 @@ private slots:
     void onNetronView();
     void onRknnSim();
     void onBoardPerf();
-    void onBoardAcc();
     void onAccCompare();
     void onExportCompare();
     void fillLayerTable(QTableWidget *t, const QJsonArray &layers);  // 填充逐层表（5 列 sim|rt）
@@ -107,7 +105,6 @@ private:
     // ONNX LAB 页
     QStackedWidget *m_views = nullptr;         // 页面栈：0=LIVE 1=模型实验室 2=WORKFLOW
     QStackedWidget *m_labStack = nullptr;      // 实验室内部子页栈：0=ONNX 基线 1=模拟量化
-    QStackedWidget *m_rkRightStack = nullptr;  // 模拟量化页右大区：0=模拟预览 1=精度对比面板
     QPushButton *m_navLive = nullptr;          // 导航页签（与页面栈双向同步）
     QPushButton *m_navLab = nullptr;           // 模型实验室页签（合并 ONNX LAB + RKNN LAB）
     QPushButton *m_segInfer = nullptr;         // 实验室内部段：ONNX 基线
@@ -139,16 +136,12 @@ private:
     QDoubleSpinBox *m_rkConfSpin = nullptr;
     QDoubleSpinBox *m_rkIouSpin = nullptr;
     QPushButton *m_btnRkSim = nullptr;
-    QPushButton *m_btnCompare = nullptr;       // ⚖️ 四级精度对比
+    QPushButton *m_btnCompare = nullptr;       // ⚖️ 七通道精度对比
     QPushButton *m_btnBoardPerf = nullptr;     // 📡 板端 NPU 性能
-    QPushButton *m_btnAcc = nullptr;           // 🎯 量化精度（accuracy_analysis）
-    QLineEdit *m_accDevice = nullptr;          // 网络 adb 地址（IP:端口）
-    BoardAccRunner *m_acc = nullptr;
+    QLineEdit *m_accDevice = nullptr;          // 网络 adb 地址（IP:端口，⚖️/📡 共用）
     AccCompareRunner *m_compare = nullptr;
     RknnSimRunner *m_rknn = nullptr;
     BoardPerfRunner *m_boardPerf = nullptr;
-    PreviewWidget *m_rkPreview = nullptr;
-    QLabel *m_rkStats = nullptr;
     // LIVE 页 PC 实时推理
     QCheckBox *m_ckLiveInfer = nullptr;        // ⚡ PC 实时推理开关
     QLineEdit *m_liveModelPath = nullptr;      // ONNX 模型（预览流叠加用）

@@ -3,7 +3,6 @@
 #include "core/deployer.h"
 #include "core/mjpegclient.h"
 #include "core/boardmonitor.h"
-#include "core/boardacc.h"
 #include "core/acccompare.h"
 #include "core/boardperf.h"
 #include "core/inferstream.h"
@@ -228,75 +227,23 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                                ? QStringLiteral("已填充") : QStringLiteral("见「🎯量化精度」")),
                   "#3ecf72");
     });
-    m_acc = new BoardAccRunner(this);
-    connect(m_acc, &BoardAccRunner::logLine, this, &MainWindow::appendLog);
-    connect(m_acc, &BoardAccRunner::finished, this, [this](bool ok, const QString &json,
-                                                           const QString &err) {
-        m_btnAcc->setEnabled(true);
-        if (!ok) {
-            appendLog(QStringLiteral("量化精度失败: %1").arg(err), "#ff6b6b");
-            QMessageBox::warning(this, QStringLiteral("量化精度"), err);
-            return;
-        }
-        // 解析 layers，产出 人读汇总表
-        const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
-        const QJsonArray layers = doc.object().value("layers").toArray();
-        const QString outDir = doc.object().value("out_dir").toString();
-        QString table = QStringLiteral("层名                          sim_entire  sim_single  rt_entire  rt_single\n");
-        double minSingle = 2.0;
-        for (const QJsonValue &v : layers) {
-            const QJsonObject o = v.toObject();
-            const double ss = o.value("sim_single_cos").toDouble(1.0);
-            minSingle = qMin(minSingle, ss);
-            table += QStringLiteral("%1  %2  %3  %4  %5\n")
-                         .arg(o.value("name").toString(), -34)
-                         .arg(o.value("sim_entire_cos").toDouble(), 0, 'f', 5)
-                         .arg(o.value("sim_single_cos").toDouble(1.0), 0, 'f', 5)
-                         .arg(o.value("rt_entire_cos").toDouble(1.0), 0, 'f', 5)
-                         .arg(o.value("rt_single_cos").toDouble(1.0), 0, 'f', 5);
-        }
-        appendLog(QStringLiteral("量化精度完成: %1 层，最低 sim_single_cos=%2")
-                      .arg(layers.size())
-                      .arg(minSingle, 0, 'f', 5), "#3ecf72");
-        // 填充数据面板 int8 逐层 tab（sim+runtime 五列）并切过去；明细文件仍可用
-        fillLayerTable(m_tabInt8, layers);
-        m_views->setCurrentIndex(1);
-        m_navLab->setChecked(true);
-        m_labStack->setCurrentIndex(1);
-        m_rkRightStack->setCurrentIndex(1);       // 精度对比面板
-        m_cmpViewStack->setCurrentIndex(2);       // 数据面板（逐层表在此）
-        appendLog(QStringLiteral("逐层明细文件: %1/error_analysis.txt").arg(outDir), "#8b97a8");
-        m_lastCompareJson = json;                 // 供 💾 导出（layers 数据源）
-    });
     connect(m_rknn, &RknnSimRunner::finished, this, [this](const OnnxResult &r) {
         m_btnRkSim->setEnabled(true);
         if (!r.ok) {
-            m_rkStats->setText(QStringLiteral("✗ %1").arg(r.error));
-            appendLog(QStringLiteral("RKNN 模拟失败: %1").arg(r.error), "#ff6b6b");
+            appendLog(QStringLiteral("转换/模拟失败: %1").arg(r.error), "#ff6b6b");
             return;
         }
-        const QImage img = annotateImage(r);
-        if (!img.isNull()) {
-            m_rkPreview->setFrame(img);
-            m_rkPreview->setStatus(QStringLiteral("SIM %1 框").arg(r.detections.size()));
-        }
-        m_rkStats->setText(QStringLiteral(
-            "模拟(×86, 非板端性能) · 模型 %1 · 转换配置 %2%3  |  build %4ms · 推理 %5ms · 后处理 %6ms · 合计 %7ms  |  conf=%8 iou=%9  |  检出 %10 框")
-            .arg(r.model).arg(r.meanstd)
-            .arg(r.rknnSaved ? QStringLiteral(" · .rknn 已存盘") : QString())
-            .arg(r.loadMs, 0, 'f', 0).arg(r.inferMs, 0, 'f', 0)
-            .arg(r.postMs, 0, 'f', 1).arg(r.totalMs, 0, 'f', 0)
-            .arg(r.confTh, 0, 'f', 2).arg(r.iouTh, 0, 'f', 2)
-            .arg(r.detections.size()));
-        appendLog(QStringLiteral("RKNN 模拟完成: %1 · %2 框 · 模拟推理 %3ms（非板端性能）")
-                      .arg(r.model).arg(r.detections.size()).arg(r.inferMs, 0, 'f', 0),
+        appendLog(QStringLiteral("转换+模拟完成(×86, 非板端性能): %1 · %2 框 · build %3ms · 推理 %4ms%5")
+                      .arg(r.model).arg(r.detections.size())
+                      .arg(r.loadMs, 0, 'f', 0).arg(r.inferMs, 0, 'f', 0)
+                      .arg(r.rknnSaved ? QStringLiteral(" · ✅ .rknn 已存盘")
+                                       : QStringLiteral(" · ⚠ 未填存盘路径，仅模拟")),
                   "#3ecf72");
     });
     m_boardPerf = new BoardPerfRunner(this);
     connect(m_boardPerf, &BoardPerfRunner::finished, this, [this](const BoardPerf &r) {
         m_btnBoardPerf->setEnabled(true);
         if (!r.ok) {
-            m_rkStats->setText(QStringLiteral("✗ 板端性能: %1").arg(r.error));
             appendLog(QStringLiteral("板端性能失败: %1 %2").arg(r.error, r.rawOut), "#ff6b6b");
             return;
         }
@@ -304,12 +251,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             ? QString() : QStringLiteral("（%1 框×%2 轮： %3）")
                 .arg(r.framesPerRun).arg(r.e2eMs.size())
                 .arg([&]{ QString s; for (double v : r.e2eMs) s += QStringLiteral("%1 ").arg(v, 0, 'f', 1); return s; }());
-        m_rkStats->setText(QStringLiteral(
-            "📡 板端 NPU 真测 · 推理增量 %1ms/帧 · full e2e %2ms · base %3ms（%4 框 × %5 轮取中位）")
-            .arg(r.inferMs, 0, 'f', 1).arg(r.avgMs, 0, 'f', 1).arg(r.baseAvgMs, 0, 'f', 1)
-            .arg(r.framesPerRun).arg(r.e2eMs.size()));
-        appendLog(QStringLiteral("板端性能: %1 · e2e 平均 %2ms/帧 · min %3ms %4")
-                      .arg(r.model).arg(r.avgMs, 0, 'f', 1).arg(r.minMs, 0, 'f', 1).arg(runsStr),
+        appendLog(QStringLiteral("📡 板端 NPU 真测: 推理增量 %1ms/帧 · full e2e %2ms · base %3ms · %4 · min %5ms %6")
+                      .arg(r.inferMs, 0, 'f', 1).arg(r.avgMs, 0, 'f', 1).arg(r.baseAvgMs, 0, 'f', 1)
+                      .arg(r.model).arg(r.minMs, 0, 'f', 1).arg(runsStr),
                   "#3ecf72");
     });
     refreshStatus();
@@ -804,10 +748,14 @@ void MainWindow::buildUi() {
     m_rkSavePath = new QLineEdit;
     m_rkSavePath->setPlaceholderText(QStringLiteral(".rknn 路径（build 存盘 或 导入外部现成的）"));
     saveRow->addWidget(m_rkSavePath, 1);
+    m_btnRkSim = new QPushButton(QStringLiteral("💾 转换导出"));
+    m_btnRkSim->setToolTip(QStringLiteral("ONNX→RKNN 转换并按上面转换配置存盘 .rknn（附带 x86 模拟自检）"));
+    saveRow->addWidget(m_btnRkSim);
     auto *btnRkBrowse = new QPushButton(QStringLiteral("…"));
     btnRkBrowse->setFixedWidth(34);
     saveRow->addWidget(btnRkBrowse);
     rkL->addLayout(saveRow);
+    connect(m_btnRkSim, &QPushButton::clicked, this, &MainWindow::onRknnSim);
     connect(btnRkBrowse, &QPushButton::clicked, this, [this] {
         const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("选择 .rknn 模型"),
                                                        QString(), QStringLiteral("RKNN 模型 (*.rknn)"));
@@ -832,55 +780,28 @@ void MainWindow::buildUi() {
     mkSpin(&m_rkIouSpin, 0.45);
     rkParamRow->addWidget(m_rkIouSpin);
     rkL->addLayout(rkParamRow);
-    // ⚖️ 精度对比：四级漏斗一键对比（ONNX→FP16→int8→板上），一幕了然
-    m_btnCompare = new QPushButton(QStringLiteral("⚖️ 精度对比（ONNX vs FP16 vs int8 vs 板上，一键四级）"));
+    // ⚖️ 精度对比：七通道全量（ONNX + 模拟/板上 × FP16/int8/int16 + 逐层），同行的板地址供其连板
+    auto *cmpRow = new QHBoxLayout;
+    m_btnCompare = new QPushButton(QStringLiteral("⚖️ 精度对比（七通道全量：模拟/板上 × FP16/int8/int16 + 逐层）"));
     m_btnCompare->setObjectName("Primary");
-    rkL->addWidget(m_btnCompare);
+    m_accDevice = new QLineEdit(QStringLiteral("192.168.3.163:5555"));
+    m_accDevice->setToolTip(QStringLiteral("板端网络 adb 地址（IP:端口）——⚖️ 板上通道与 📡 板端性能共用"));
+    cmpRow->addWidget(m_btnCompare, 1);
+    cmpRow->addWidget(m_accDevice);
+    rkL->addLayout(cmpRow);
     connect(m_btnCompare, &QPushButton::clicked, this, &MainWindow::onAccCompare);
-    m_btnRkSim = new QPushButton(QStringLiteral("⚡ 模拟推理（含 build 编译，首次较慢）"));
-    m_btnRkSim->setObjectName("Primary");
-    rkL->addWidget(m_btnRkSim);
-    connect(m_btnRkSim, &QPushButton::clicked, this, &MainWindow::onRknnSim);
-    m_btnBoardPerf = new QPushButton(QStringLiteral("📡 板端性能（NPU 真测，需板在线）"));
+    m_btnBoardPerf = new QPushButton(QStringLiteral("📡 板端性能（NPU 真测，需板在线，用「存/导入」里的 .rknn）"));
     rkL->addWidget(m_btnBoardPerf);
     connect(m_btnBoardPerf, &QPushButton::clicked, this, &MainWindow::onBoardPerf);
-    // 🎯 量化精度：ONNX→量化构建→真板逐层余弦（tools/rknn_acc.py，需网络 adb）
-    auto *accRow = new QHBoxLayout;
-    m_btnAcc = new QPushButton(QStringLiteral("🎯 量化精度（accuracy_analysis）"));
-    m_accDevice = new QLineEdit(QStringLiteral("192.168.3.163:5555"));
-    m_accDevice->setToolTip(QStringLiteral("板端网络 adb 地址（IP:端口；端口随无线调试开关变化）"));
-    accRow->addWidget(m_btnAcc, 1);
-    accRow->addWidget(m_accDevice, 1);
-    rkL->addLayout(accRow);
-    connect(m_btnAcc, &QPushButton::clicked, this, &MainWindow::onBoardAcc);
     rleft->addStretch();
 
     auto *rright = new QVBoxLayout;
     rright->setSpacing(8);
     rbody->addLayout(rright, 1);
-    // 右大区双层：0=模拟推理预览（⚡） / 1=精度对比面板（⚖️ 流式填充）
-    m_rkRightStack = new QStackedWidget;
-    rright->addWidget(m_rkRightStack, 1);
-    auto *simContainer = new QWidget;
-    auto *simL = new QVBoxLayout(simContainer);
-    simL->setContentsMargins(0, 0, 0, 0);
-    simL->setSpacing(8);
-    m_rkPreview = new PreviewWidget;
-    m_rkPreview->setPlaceholder(QStringLiteral("RKNN LAB — ONNX+转换配置 → 模拟推理"));
-    simL->addWidget(m_rkPreview, 1);
-    auto *rkStatsBar = new QFrame;
-    rkStatsBar->setObjectName("StatsBar");
-    auto *rkStatsL = new QHBoxLayout(rkStatsBar);
-    rkStatsL->setContentsMargins(12, 6, 12, 6);
-    m_rkStats = new QLabel(QStringLiteral("RKNN SIM READY — 模拟耗时为 x86 执行，非板端 NPU 性能"));
-    m_rkStats->setObjectName("StatsText");
-    rkStatsL->addWidget(m_rkStats);
-    simL->addWidget(rkStatsBar);
-    m_rkRightStack->addWidget(simContainer);          // m_rkRightStack index 0
 
     // ---- 精度对比面板（⚖️ 运行/结果就地显示在本页右大区，流式填充） ----
-    auto *pageCompareView = new QWidget;              // 命名沿用；实为 m_rkRightStack 第 1 层
-    m_rkRightStack->addWidget(pageCompareView);       // m_rkRightStack index 1
+    auto *pageCompareView = new QWidget;              // 右大区=精度对比面板（⚖️ 流式填充）
+    rright->addWidget(pageCompareView, 1);
     auto *cvLayout = new QVBoxLayout(pageCompareView);
     cvLayout->setContentsMargins(4, 4, 4, 4);
     cvLayout->setSpacing(6);
@@ -1325,7 +1246,6 @@ void MainWindow::onProbe() {
 
 void MainWindow::onRknnSim() {
     if (m_rknn->running()) return;
-    m_rkRightStack->setCurrentIndex(0);           // 模拟推理结果显示在预览层
     const QString model = m_rkModelPath->text().trimmed();
     const QString image = m_rkImagePath->text().trimmed();
     if (model.isEmpty() || !QFileInfo::exists(model)) {
@@ -1337,11 +1257,14 @@ void MainWindow::onRknnSim() {
         return;
     }
     m_btnRkSim->setEnabled(false);
-    m_rkStats->setText(QStringLiteral("模拟推理中（含 build 编译）… %1").arg(QFileInfo(model).fileName()));
-    appendLog(QStringLiteral("RKNN 模拟: %1 ← %2 (conf=%3 iou=%4 norm=%5)")
+    appendLog(QStringLiteral("转换导出: %1 ← %2 (conf=%3 iou=%4 norm=%5)%6")
                   .arg(QFileInfo(model).fileName(), QFileInfo(image).fileName())
                   .arg(m_rkConfSpin->value(), 0, 'f', 2).arg(m_rkIouSpin->value(), 0, 'f', 2)
-                  .arg(m_rkMeanStd->text()), "#8b97a8");
+                  .arg(m_rkMeanStd->text())
+                  .arg(m_rkSavePath->text().trimmed().isEmpty()
+                           ? QStringLiteral("  ⚠ 未填存盘路径，仅模拟自检")
+                           : QString()),
+                  "#8b97a8");
     m_rknn->run(image, model, m_rkConfSpin->value(), m_rkIouSpin->value(),
                 m_rkMeanStd->text().trimmed(), m_rkSavePath->text().trimmed());
 }
@@ -1404,7 +1327,7 @@ void MainWindow::onBoardPerf() {
         return;
     }
     m_btnBoardPerf->setEnabled(false);
-    m_rkStats->setText(QStringLiteral("板端性能测试中（推模型+跑引擎 %1 轮）…").arg(5));
+    appendLog(QStringLiteral("板端性能测试中（推模型+跑引擎 5 轮）…"), "#8b97a8");
     appendLog(QStringLiteral("板端性能: %1 ← %2 @ %3")
                   .arg(QFileInfo(rknn).fileName(), QFileInfo(image).fileName(), serial), "#8b97a8");
     const QString engineDir = resolveProjectsRoot() + QStringLiteral("/../build-board/engine");
@@ -1443,11 +1366,10 @@ void MainWindow::onAccCompare() {
     m_btnCompare->setEnabled(false);
     appendLog(QStringLiteral("精度对比: %1（七通道漏斗流式输出，先出 ONNX 基线，约 5~10 分钟）")
                   .arg(QFileInfo(onnx).fileName()), "#8b97a8");
-    // 结果就地显示在本页右大区（面板层），流式填充；默认停在信息面板看操作流
+    // 结果就地显示在本页右大区（对比面板），流式填充；默认停在信息面板看操作流
     m_views->setCurrentIndex(1);
     m_navLab->setChecked(true);
     m_labStack->setCurrentIndex(1);
-    m_rkRightStack->setCurrentIndex(1);
     m_cmpViewStack->setCurrentIndex(0);
     m_cmpLog->clear();
     m_metricText->clear();
@@ -1671,53 +1593,6 @@ void MainWindow::onExportCompare() {
                                             "sim_layers_*.csv / runtime_layers_*.csv（逐层表）\n"
                                             "images_*.txt（标注图路径，共 %2 张）")
                                  .arg(dir).arg(refs.size()));
-}
-
-void MainWindow::onBoardAcc() {
-    if (m_acc->running()) return;
-    const QString onnx = m_rkModelPath->text().trimmed();
-    if (onnx.isEmpty() || !QFileInfo::exists(onnx) || !onnx.endsWith(QStringLiteral(".onnx"), Qt::CaseInsensitive)) {
-        QMessageBox::warning(this, QStringLiteral("量化精度"),
-                             QStringLiteral("请先在上方选择有效的 .onnx 模型（accuracy_analysis 从 ONNX 量化构建）"));
-        return;
-    }
-    const QString image = m_rkImagePath->text().trimmed();
-    if (image.isEmpty() || !QFileInfo::exists(image)) {
-        QMessageBox::warning(this, QStringLiteral("量化精度"),
-                             QStringLiteral("请先在上方选择一张校准图片（数据闭环：正式量化建议 50~200 张）"));
-        return;
-    }
-    const QString device = m_accDevice->text().trimmed();
-    if (device.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("量化精度"), QStringLiteral("请填写板端网络 adb 地址（IP:端口）"));
-        return;
-    }
-    // dataset.txt：校准图列表（当前=所选一张图；多图时每行一张）
-    const QString dsLocal = QDir::temp().filePath(QStringLiteral("rvs_acc_dataset.txt"));
-    {
-        QFile ds(dsLocal);
-        if (!ds.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QMessageBox::warning(this, QStringLiteral("量化精度"), QStringLiteral("无法写 dataset.txt"));
-            return;
-        }
-        ds.write((OnnxRunner::toWslPath(image) + QStringLiteral("\n")).toUtf8());
-    }
-    QString meanstd = m_rkMeanStd->text().trimmed();
-    if (meanstd.isEmpty() || meanstd.contains(QStringLiteral("none")))
-        meanstd = QStringLiteral("0,0,0/255,255,255");
-    meanstd.replace(QLatin1Char('|'), QLatin1Char('/'));
-    const QString outDir = QDir::temp().filePath(QStringLiteral("rknn_acc_out"));
-
-    m_btnAcc->setEnabled(false);
-    appendLog(QStringLiteral("量化精度: %1 @ %2（量化构建+逐层推理，数分钟）")
-                  .arg(QFileInfo(onnx).fileName(), device), "#8b97a8");
-    m_acc->start(QStringLiteral("Ubuntu-22.04"),
-                 OnnxRunner::toWslPath(QString::fromUtf8(RVS_TOOLS_DIR) +
-                                       QStringLiteral("/rknn_acc.py")),
-                 OnnxRunner::toWslPath(onnx),
-                 OnnxRunner::toWslPath(dsLocal),
-                 device, meanstd,
-                 QStringLiteral("/tmp/rknn_acc_out"));
 }
 
 void MainWindow::onNetronView() {
