@@ -212,6 +212,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         if (idx < 0 || layers.isEmpty()) return;
         fillLayerTable(m_chanTable[idx], layers);
         // 逐层摘要追加到该通道总体指标下（保留已有行，幂等替换）
+        QString base = m_chanLabel[idx]->text();
+        base.remove(QRegularExpression(QStringLiteral("^逐层: .*$"),
+                                       QRegularExpression::MultilineOption));
+        if (o.value(QStringLiteral("kind")).toString() == QStringLiteral("onnx")) {
+            int sens = 0;
+            for (const QJsonValue &v : layers)
+                if (v.toObject().value(QStringLiteral("outlier")).toDouble(0) > 10) ++sens;
+            m_chanLabel[idx]->setText(base.trimmed() +
+                QStringLiteral("\n逐层: %1 层 · 每层算子+张量统计 · 量化敏感(outlier>10) %2 层（红字）")
+                    .arg(layers.size()).arg(sens));
+            return;
+        }
         const bool sim = layers.first().toObject().contains(QStringLiteral("sim_entire_cos"));
         const QString cosk = sim ? QStringLiteral("sim_single_cos")
                                  : QStringLiteral("rt_single_cos");
@@ -222,9 +234,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             mn = qMin(mn, ss);
             if (ss < 0.99) ++lows;
         }
-        QString base = m_chanLabel[idx]->text();
-        base.remove(QRegularExpression(QStringLiteral("^逐层: .*$"),
-                                       QRegularExpression::MultilineOption));
         m_chanLabel[idx]->setText(base.trimmed() + QStringLiteral("\n逐层: %1 层 · 最低 %2 %3 · 低于0.99 %4 层")
                                       .arg(layers.size()).arg(sim ? "sim" : "rt")
                                       .arg(mn, 0, 'f', 5).arg(lows));
@@ -920,9 +929,17 @@ void MainWindow::buildUi() {
         m_chanLabel[i]->setWordWrap(true);
         m_chanLabel[i]->setTextInteractionFlags(Qt::TextSelectableByMouse);
         pl->addWidget(m_chanLabel[i]);
-        m_chanTable[i] = new QTableWidget(0, 3);
-        m_chanTable[i]->setHorizontalHeaderLabels(
-            {QStringLiteral("层"), QStringLiteral("entire cos"), QStringLiteral("single cos")});
+        if (i == 0) {   // ① 基线：算子+张量统计（ONNX 体检）
+            m_chanTable[i] = new QTableWidget(0, 9);
+            m_chanTable[i]->setHorizontalHeaderLabels(
+                {QStringLiteral("层"), QStringLiteral("算子"), QStringLiteral("shape"),
+                 QStringLiteral("min"), QStringLiteral("max"), QStringLiteral("mean"),
+                 QStringLiteral("std"), QStringLiteral("零%"), QStringLiteral("outlier比")});
+        } else {        // ②~⑦：量化/运行时余弦
+            m_chanTable[i] = new QTableWidget(0, 3);
+            m_chanTable[i]->setHorizontalHeaderLabels(
+                {QStringLiteral("层"), QStringLiteral("entire cos"), QStringLiteral("single cos")});
+        }
         m_chanTable[i]->setAlternatingRowColors(true);
         pl->addWidget(m_chanTable[i], 1);
         chanTabs->addTab(page, chanName(i));
@@ -1440,7 +1457,7 @@ void MainWindow::refreshChanLabel(int idx, const QJsonObject &o) {
     QString txt;
     if (k == QLatin1String("1_onnx")) {
         txt = st.contains(QStringLiteral("n"))
-                  ? QStringLiteral("float32 金标准 · 检出 %1 框\n逐层体检无意义：它就是参考答案")
+                  ? QStringLiteral("float32 金标准 · 检出 %1 框\n下方逐层=每层算子与张量统计（outlier比>10=量化敏感层候选，红字）")
                         .arg(st.value(QStringLiteral("n")).toInt())
                   : QStringLiteral("推理中…");
     } else if (st.isEmpty()) {
@@ -1527,8 +1544,47 @@ void MainWindow::updateCompareSummary(const QJsonObject &o) {
                               .arg(body));
 }
 
-// 逐层表填充：三列（层名 + entire/single cos）——首层带 sim_* 键则读 sim，否则读 rt；低余弦标红
+// 逐层表填充：三列（层名 + entire/single cos）——首层带 sim_* 键则读 sim，否则读 rt；低余弦标红。
+// 首层带 type 键 = ① ONNX 体检（算子+张量统计，9 列，outlier>10 量化敏感标红）
 void MainWindow::fillLayerTable(QTableWidget *t, const QJsonArray &layers) {
+    auto mkNum = [](double val, int prec = 5) {
+        auto *it = new QTableWidgetItem(QString::number(val, 'f', prec));
+        return it;
+    };
+    if (!layers.isEmpty() && layers.first().toObject().contains(QStringLiteral("type"))) {
+        t->setColumnCount(9);
+        t->setHorizontalHeaderLabels(
+            {QStringLiteral("层"), QStringLiteral("算子"), QStringLiteral("shape"),
+             QStringLiteral("min"), QStringLiteral("max"), QStringLiteral("mean"),
+             QStringLiteral("std"), QStringLiteral("零%"), QStringLiteral("outlier比")});
+        t->setRowCount(0);
+        int row = 0;
+        for (const QJsonValue &v : layers) {
+            const QJsonObject o = v.toObject();
+            t->insertRow(row);
+            t->setItem(row, 0, new QTableWidgetItem(o.value(QStringLiteral("name")).toString()));
+            t->setItem(row, 1, new QTableWidgetItem(o.value(QStringLiteral("type")).toString()));
+            const QJsonArray sh = o.value(QStringLiteral("shape")).toArray();
+            t->setItem(row, 2, new QTableWidgetItem(
+                sh.size() > 1 ? QStringLiteral("%1×%2×%3×%4").arg(sh.at(0).toInt(), sh.at(1).toInt())
+                                                         .arg(sh.at(2).toInt(), sh.at(3).toInt())
+                            : QStringLiteral("-")));
+            t->setItem(row, 3, mkNum(o.value(QStringLiteral("min")).toDouble()));
+            t->setItem(row, 4, mkNum(o.value(QStringLiteral("max")).toDouble()));
+            t->setItem(row, 5, mkNum(o.value(QStringLiteral("mean")).toDouble()));
+            t->setItem(row, 6, mkNum(o.value(QStringLiteral("std")).toDouble()));
+            t->setItem(row, 7, mkNum(o.value(QStringLiteral("zero_pct")).toDouble(), 1));
+            const double out = o.value(QStringLiteral("outlier")).toDouble(-1);
+            auto *oit = new QTableWidgetItem(out > 0 ? QString::number(out, 'f', 1)
+                                                     : QStringLiteral("—"));
+            if (out > 10)
+                oit->setForeground(QColor(0xff, 0x6b, 0x6b));   // 量化敏感层候选
+            t->setItem(row, 8, oit);
+            ++row;
+        }
+        t->resizeColumnsToContents();
+        return;
+    }
     const bool sim = !layers.isEmpty() &&
                      layers.first().toObject().contains(QStringLiteral("sim_entire_cos"));
     const QString ek = sim ? QStringLiteral("sim_entire_cos")

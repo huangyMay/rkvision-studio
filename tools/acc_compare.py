@@ -252,7 +252,22 @@ def main():
             log(f"{label} 失败: {str(e)[:120]}")
             emit_stage(key)
 
-    # ---------- 逐层精度（按通道出数：fp16/int8/int16 模拟各自一张表；板上另出 rt 表） ----------
+    # ---------- 逐层精度（① ONNX 体检先行；然后按通道：fp16/int8/int16 模拟 + 板上 rt） ----------
+    # ① 基线逐层体检：每层算子/shape/统计/outlier 比（量化敏感度），纯 PC 几秒
+    try:
+        from onnx_probe import probe
+        pl, pm = probe(onnx_path, image_path)
+        slim = [{k: l[k] for k in ("name", "type", "shape", "min", "max",
+                                   "mean", "std", "zero_pct", "outlier")}
+                for l in pl]
+        report["layers"]["1_onnx"] = slim
+        sens = [l for l in slim if (l.get("outlier") or 0) > 10]
+        log(f"① ONNX 逐层体检: {len(slim)} 层 · 量化敏感(outlier>10) {len(sens)} 层 · {pm['total_ms']:.0f}ms")
+        print("LAYERS " + json.dumps({"ch": "1_onnx", "kind": "onnx", "layers": slim},
+                                     ensure_ascii=False), flush=True)
+    except Exception as e:  # noqa: BLE001
+        log(f"① ONNX 逐层体检失败: {str(e)[:100]}")
+
     # 顺序原则：模拟全先跑（稳）；板上按 int8 → fp16 → int16 排，int16 板上已知平台断点放最后，
     # 避免它的 ACK_FAIL 楔死 rknn_server 殃及后面的板上分析
     if dump_dir and dataset:

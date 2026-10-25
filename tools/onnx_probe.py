@@ -34,21 +34,9 @@ def patch_graph_outputs(model):
     return model
 
 
-def main():
-    if len(sys.argv) < 3:
-        print(json.dumps({"ok": False,
-                          "error": "usage: onnx_probe.py <model.onnx> <image> [out_dir]"}))
-        return
-    onnx_path = os.path.abspath(sys.argv[1])
-    image_path = os.path.abspath(sys.argv[2])
-    out_dir = os.path.abspath(sys.argv[3]) if len(sys.argv) > 3 else "/tmp/onnx_probe_out"
-    os.makedirs(out_dir, exist_ok=True)
-
-    for p, what in ((onnx_path, "模型"), (image_path, "图片")):
-        if not os.path.exists(p):
-            print(json.dumps({"ok": False, "error": f"{what}不存在: {p}"}))
-            return
-
+def probe(onnx_path, image_path):
+    """核心体检：图手术暴露全部中间张量 → 单次推理 → 逐层统计。
+    返回 (layers, meta)；layers 每项含 name/type/shape/min/max/mean/std/zero_pct/absmax/p999/outlier。"""
     model = onnx.load(onnx_path)
     patch_graph_outputs(model)
     sess = ort.InferenceSession(model.SerializeToString(),
@@ -61,10 +49,8 @@ def main():
 
     img = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if img is None:
-        print(json.dumps({"ok": False, "error": f"图片解码失败: {image_path}"}))
-        return
+        raise RuntimeError(f"图片解码失败: {image_path}")
     lb, _, _, _ = letterbox(img, max(ih, iw))
-    # 与 onnx_infer 相同预处理：HWC→CHW、BGR→RGB、/255
     blob = cv2.dnn.blobFromImage(lb, 1.0 / 255.0, swapRB=True)
 
     names = [o.name for o in sess.get_outputs()]
@@ -95,6 +81,30 @@ def main():
             "absmax": round(absmax, 5), "p999": round(p999, 5),
             "outlier": outlier,
         })
+    return layers, {"ih": ih, "iw": iw, "total_ms": round(total_ms, 1)}
+
+
+def main():
+    if len(sys.argv) < 3:
+        print(json.dumps({"ok": False,
+                          "error": "usage: onnx_probe.py <model.onnx> <image> [out_dir]"}))
+        return
+    onnx_path = os.path.abspath(sys.argv[1])
+    image_path = os.path.abspath(sys.argv[2])
+    out_dir = os.path.abspath(sys.argv[3]) if len(sys.argv) > 3 else "/tmp/onnx_probe_out"
+    os.makedirs(out_dir, exist_ok=True)
+
+    for p, what in ((onnx_path, "模型"), (image_path, "图片")):
+        if not os.path.exists(p):
+            print(json.dumps({"ok": False, "error": f"{what}不存在: {p}"}))
+            return
+
+    try:
+        layers, meta = probe(onnx_path, image_path)
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"ok": False, "error": str(e)[:200]}))
+        return
+    ih, iw, total_ms = meta["ih"], meta["iw"], meta["total_ms"]
 
     # 量化敏感层：outlier 比（absmax / p99.9）越大，int8 按 max 定 scale 时
     # 其余值的有效分辨率被压得越狠——这是转换前就能看到的"量化伤"信号
