@@ -218,7 +218,7 @@ yolov8n 七通道全量对比实测（板 rk3576 / 驱动 0.9.8 / toolkit2+serve
 - ①~⑥ 全过：sim fp16 0.9995 / sim int8 0.9933 / sim int16 1.0 / 板 fp16 0.999 / 板 int8 0.9851（mean IoU vs ONNX）
 - ⑦ 板上 int16（w16a16i）：模型能 init、推理能跑，但 `rknn_outputs_get` 恒 `ACK_FAIL → RKNN_ERR_FAIL`。
 
-**根因（最小复现实验链逐步锁定，非猜测）**：
+**根因（最小复现实验链逐步锁定 + libiotrace 机制层实锤，非猜测）**：
 
 | 实验 | 结果 | 排除/锁定 |
 |---|---|---|
@@ -233,6 +233,17 @@ yolov8n 七通道全量对比实测（板 rk3576 / 驱动 0.9.8 / toolkit2+serve
 | mini+Sigmoid + op_target Sigmoid→cpu | ❌ 仍炸 | **op_target 对 i16 不生效，无软件修法** |
 | w8a16 | config 直接拒绝 | RK3576 不支持 |
 | w4a16 全模型板推 | ✅ 跑通但仅 2 框 conf 0.35 | 4-bit 权重毁 CNN 精度，不如 int8，非出路 |
+| **libiotrace 挂 rknn_server 跑 int16 模型** | **首次 SUBMIT ret=-1（6s 超时）** | **机制层实锤，见下** |
+
+**机制层实锤（2026-10-25 libiotrace，修正早期"输出回传断"的表象判断）**：
+int16 模型 load/init 全正常，输入同步完成后**第一条 SUBMIT（108 任务段）即 ret=-1**——
+时间戳显示从提交到失败正好 6000ms = 驱动阻塞等待超时。即 **NPU 接到 int16 指令流后
+挂死（不产生完成中断），驱动超时报错**；随后 librknnrt 走 POWER_OFF+MEM_DESTROY
+清理现场，把错误上报为 "rknn_outputs_get ACK_FAIL"——**API 层的 ACK_FAIL 是清理
+路径的表象，不是取输出环节的问题**。为何全 CPU 的 mini 模型能过：无 NPU 段提交，
+自然不触发。Conv 在 build 期有 "Not Support u8->i16" 拦截（120 条全回退 CPU），
+但 **Sigmoid/Concat 的 i16 指令编译无拦截、执行挂死**——这套栈（驱动 0.9.8+rt 2.3.2）
+的 i16 NPU 指令路径是坏的。
 
 **结论**：w16a16i 时 Conv 全部自动回退 CPU（build 日志 "Conv Not Support u8->i16"×120），但 **Sigmoid/Concat 仍被排上 NPU 以 i16 执行——RK3576 这代栈（驱动 0.9.8+rt 2.3.2）i16 的 NPU 算子输出回传是坏的**，任何含 Sigmoid/Concat 的 i16 模型（= 所有检测模型）板上必炸。注意与"CPU 回退路径不通"的旧假设相反：全 CPU 的模型（mini 系）输出全能拿回；坏的恰恰是留在 NPU 上的那部分。**高精度需求用板上 FP16（0.999），生产用 int8（0.9851）；板上 w16a16i 等瑞芯微修复**（可携最小复现提 issue：Conv+Sigmoid@640 + w16a16i + rk3576 即复现）。
 
