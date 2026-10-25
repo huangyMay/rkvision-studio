@@ -43,6 +43,34 @@ def adb_path_prepend():
     os.environ["PATH"] = home_bin + os.pathsep + os.environ.get("PATH", "")
 
 
+def restart_board_server(device):
+    """板上逐层分析前自愈 rknn_server：楔死（进程在 futex_wait 不应答）是反复出现的
+    故障模式——板上 int16 的 ACK_FAIL 会楔死它，后续所有板上操作 10 秒内连环快速失败。
+    无脑重启最稳：pkill 后拉起 /data/local/tmp 配对 2.3.2 版，等 3s，查活。"""
+    import shutil
+    import subprocess
+    adb_path_prepend()          # GUI 经 wsl.exe 起的进程无登录 PATH，先保证找得到 adb
+    adb = shutil.which("adb")
+    if not adb:
+        return False
+    try:
+        subprocess.run([adb, "-s", device, "shell", "pkill -f rknn_server"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        import time as _t
+        _t.sleep(1)
+        subprocess.run([adb, "-s", device, "shell",
+                        "LD_LIBRARY_PATH=/data/local/tmp/rvs nohup /data/local/tmp/rknn_server "
+                        "</dev/null >/dev/null 2>&1 &"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        _t.sleep(3)
+        r = subprocess.run([adb, "-s", device, "shell",
+                            "ps -A | grep -v grep | grep -c rknn_server"],
+                           capture_output=True, timeout=10)
+        return b"1" in r.stdout
+    except Exception:
+        return False
+
+
 def start_keepalive(device):
     """网络设备（IP:端口）时启动保活守护线程：accuracy_analysis 内部 adb root
     会重启 adbd、切断 TCP 传输，导致工具挂死；每 3s 重连+保 root 即可预防。"""
@@ -51,6 +79,7 @@ def start_keepalive(device):
     import shutil
     import threading
     import subprocess
+    adb_path_prepend()          # GUI 经 wsl.exe 起的进程无登录 PATH，先保证找得到 adb
     adb = shutil.which("adb")
     if not adb:
         return

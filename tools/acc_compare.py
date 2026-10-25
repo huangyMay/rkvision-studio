@@ -311,8 +311,13 @@ def main():
                 emit_layers(ch, acc_once(quant, dtype, sub, None, None), "sim")
             except Exception as e:  # noqa: BLE001
                 log(f"逐层·{ch} 失败: {str(e)[:100]}")
-        # 板上三连（⑥⑤⑦）：int8 最重要先跑；int16 已知断点殿后
+        # 板上三连（⑥⑤⑦）：int8 最重要先跑；int16 已知断点殿后。
+        # 板逐层前自愈重启 rknn_server——楔死态（进程在不应答）会让三连 10 秒内连环快速失败
         if device:
+            from rknn_acc import restart_board_server
+            log("板上逐层前自愈重启 rknn_server…")
+            if not restart_board_server(device):
+                log("⚠ rknn_server 重启未确认存活——板上逐层可能失败")
             for ch, quant, dtype, sub in [
                     ("6_board_int8", True, None, "board_int8"),
                     ("5_board_fp16", False, None, "board_fp16"),
