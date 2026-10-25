@@ -249,6 +249,31 @@ int16 模型 load/init 全正常，输入同步完成后**第一条 SUBMIT（108
 
 **连带效应**：⑦ 失败后 rknn_server 进程仍活着但连接线程楔死（`futex_wait`），同脚本后续板上 accuracy_analysis 全部 Traceback。遇到"板上操作连环失败但 server 进程在"→ 先 `pkill -f rknn_server` 重启再判。逐层（accuracy_analysis）模拟列不受影响：int8 177 层最低 sim_single 0.99398、int16 177 层 0.99998。GUI 侧该失败被逐级捕获展示（⑦ 格子空+红字），不阻塞其余六通道。
 
+### 6.4 2026-10-25 RK3588 Debian 板三档实测（Lite2 原生路径）
+
+板：RK3588 Debian 12（WiFi 192.168.3.109，驱动 0.9.8 + librknnrt 2.3.2）。yolov8n + bus.jpg，
+板端 rknn-toolkit-lite2 原生推理（绕开 rknn_server 通道），ONNX 基线 4 框：
+
+| dtype | 框 | conf | 板端耗时 | 判定 |
+|---|---|---|---|---|
+| int8 | 4/4 全对 | 0.73~0.76 | **54.0 ms/帧** | ✅ 完美 |
+| fp16 | 4/4 全对 | 0.85~0.88 | **72.9 ms/帧** | ✅ 完美 |
+| int16(w16a16i) | 0 框 | — | 6400 ms/帧 | ❌ 全废 |
+
+**int16 在 3588 上同样不可用，且与 3576 同病不同症**：板上日志
+`failed to submit!, op id: 2, op name: Conv:/model.1/conv/Conv, task number: 64, run task counter: 40`
+——NPU 任务提交失败（与 3576 的 SUBMIT 超时同族）；3588 原生路径不抛异常而是**返回常量垃圾输出**
+（min==max），6400ms≈每帧走失败慢路径。注意 RK3588 编译器把 Conv 以 i16 编上 NPU（3576 是
+Conv 回退 CPU、Sigmoid/Concat 上 NPU 挂）——**两代 RKNPU 的 i16 NPU 路径在 0.9.8 驱动栈上都是坏的**，
+结论升级：非单板问题，是这套芯片+驱动代的 w16a16i 断层。高精度选 fp16（3588 上 72.9ms 也可用）。
+
+**工具链记录**：① rknn_server 远程通道在 Debian 板 ERROR_PIPE——板上 server accept 后
+"Create client failed"(ret=-1/-11)，链路本身通（手动 forward 保持连接）；SDK/系统版 server 均如此，
+root cause 未定（unknowns），Lite2 原生路径是 Debian 板的正解；② 板上 pip3 需 apt 装
+python3-pip + `pip3 install --break-system-packages rknn-toolkit-lite2 opencv-python-headless`；
+③ onnx_infer.py 板侧 import 用 `sys.modules['onnxruntime']=假模块` 绕 ort 依赖；④
+Debian 板起后台进程 `setsid xxx </dev/null &`（nohup& 会被会话回收）。
+
 ## 7. 方法论沉淀
 
 - **卡点先搜后试**：本次最大的弯路（usbipd/ARP 的一长串尝试）始于没先搜"accuracy_analysis 别人怎么跑"——一搜就发现 load_rknn 限制和官方流程。先查官方文档与社区做法，再动手。
