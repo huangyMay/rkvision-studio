@@ -1400,7 +1400,7 @@ void MainWindow::onAccCompare() {
     const QString device = m_accDevice->text().trimmed();   // 空则跳过④
 
     m_btnCompare->setEnabled(false);
-    appendLog(QStringLiteral("精度对比: %1（七通道漏斗流式输出，先出 ONNX 基线，约 5~10 分钟）")
+    appendLog(QStringLiteral("精度对比: %1（七通道漏斗流式输出，先出 ONNX 基线，约 15~25 分钟（七次逐层分析是大头，途中别关软件））")
                   .arg(QFileInfo(onnx).fileName()), "#8b97a8");
     // 结果就地显示在本页右大区（对比面板），流式填充；默认停在信息面板看操作流
     m_views->setCurrentIndex(1);

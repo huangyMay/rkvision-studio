@@ -4,7 +4,7 @@
 #include <QTimer>
 
 namespace {
-constexpr int kTimeoutMs = 12 * 60 * 1000;   // fp16+int8 双构建+四级推理实测 ~5 分钟
+constexpr int kTimeoutMs = 35 * 60 * 1000;   // 七通道+6 次逐层分析实测 15~25 分钟（板上经 server 较慢）
 }
 
 AccCompareRunner::AccCompareRunner(QObject *parent) : QObject(parent) {}
@@ -70,9 +70,13 @@ void AccCompareRunner::start(const QString &distro, const QString &scriptWsl,
 
     QTimer::singleShot(kTimeoutMs, m_proc, [this] {
         if (m_proc) {
+            m_proc->disconnect(this);   // 先断信号：kill 触发的 finished 不再二次发"无 JSON"覆盖超时信息
             m_proc->kill();
+            m_proc->deleteLater();
+            m_proc = nullptr;
             emit finished(false, QString(),
-                          QStringLiteral("精度对比超时（12 分钟）——查 WSL toolkit2 与网络 adb"));
+                          QStringLiteral("精度对比超时（35 分钟）——七通道含 6 次逐层分析，"
+                                         "正常 15~25 分钟；查板端 rknn_server 与网络 adb"));
         }
     });
 
