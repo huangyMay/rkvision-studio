@@ -2,6 +2,8 @@
 
 [![ci](https://github.com/huangyMay/rkvision-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/huangyMay/rkvision-studio/actions/workflows/ci.yml)
 
+[English](README_EN.md) | 简体中文
+
 > 把「模型 → RKNN → 板上 NPU → 实时画面」这条链，装进一个工作台。
 > One workbench for the whole edge-AI chain: model → RKNN → on-board NPU → live video.
 
@@ -17,6 +19,7 @@
 
 - `pipeline.json` 声明式流水线：source → preprocess → infer → post → sink，换模型/换后处理零代码，新增算子即新增一个 `REGISTER_STAGE` 文件；
 - **双 LAB 对照**：同一张图同一套阈值，ONNX（onnxruntime）与 RKNN（toolkit2 模拟器）并排跑，逐框数值一致才算数；RKNN LAB 的副产品就是可上板的 `.rknn`；
+- **精度分析中心**：⚖️ 一键七通道对比（ONNX → 模拟 fp16/int8/int16 → 板上 fp16/int8/int16，逐层余弦+标注图同屏）、🧬 混合量化向导（敏感层保 fp16 修精度）、🚀 板上性能剖析（core_mask 矩阵+devfreq 定频+set/run/get 分段瀑布）、🔪 `.rknn` 容器离线解剖；
 - **金标准逐位回归**：板上输出张量级比对（gold_regression），后处理改动是否影响结果，机器说了算；
 - **一键部署闭环**：交叉编译 → adb 推送 → 板上执行 → 结果拉回，一条命令。
 
@@ -117,6 +120,7 @@ cd app-rvscam && ./gradlew assembleDebug
 - [docs/2026-10-16-框架设计.md](docs/2026-10-16-框架设计.md) —— 架构与插件机制
 - [docs/2026-10-17-构建与验证手册.md](docs/2026-10-17-构建与验证手册.md) —— 从零到板上跑通的操作手册
 - [docs/2026-10-18-工业工作流设计.md](docs/2026-10-18-工业工作流设计.md) —— 工业视觉任务模板 / 判决 DSL / 路线图
+- [docs/2026-10-25-性能剖析页与模型解剖.md](docs/2026-10-25-性能剖析页与模型解剖.md) —— NPU 分段计时（set/run/get）/core_mask 矩阵/.rknn 容器布局
 
 ## License
 
